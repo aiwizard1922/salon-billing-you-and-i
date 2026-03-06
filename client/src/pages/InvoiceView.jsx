@@ -11,27 +11,69 @@ export default function InvoiceView() {
   const navigate = useNavigate();
   const [invoice, setInvoice] = useState(null);
   const [shop, setShop] = useState(null);
+  const [activeMembership, setActiveMembership] = useState(null);
+  const [payError, setPayError] = useState('');
   const [paying, setPaying] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [secondaryPaymentMethod, setSecondaryPaymentMethod] = useState('cash');
 
   useEffect(() => {
     fetch(`${API}/invoices/${id}`)
       .then((r) => r.json())
-      .then((d) => d.success && setInvoice(d.data));
+      .then((d) => {
+        if (d.success) {
+          setInvoice(d.data);
+          if (d.data.status === 'pending' && d.data.customer_id) {
+            fetch(`${API}/membership/for-customer?customerId=${d.data.customer_id}`)
+              .then((r2) => r2.json())
+              .then((d2) => setActiveMembership(d2.data || null));
+          } else {
+            setActiveMembership(null);
+          }
+        } else {
+          setInvoice({ notFound: true });
+        }
+      })
+      .catch(() => setInvoice({ notFound: true }));
     fetch(`${API}/shop`)
       .then((r) => r.json())
       .then((d) => d.success && setShop(d.data));
   }, [id]);
 
+  useEffect(() => {
+    if (invoice?.status === 'pending' && activeMembership) {
+      const bal = (Number(activeMembership.remaining_balance) ?? Number(activeMembership.initial_balance)) ||
+        ((activeMembership.usage_count ?? 0) === 0 ? (Number(activeMembership.plan_price) || Number(activeMembership.special_price) || 0) : 0);
+      if (bal > 0) setPaymentMethod('membership');
+    }
+  }, [invoice, activeMembership]);
+
+  const membershipId = activeMembership?.id;
+
   const markPaid = () => {
+    setPayError('');
     setPaying(true);
-    fetch(`${API}/invoices/${id}/pay`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paymentMethod }) })
+    const body = { paymentMethod };
+    if (paymentMethod === 'membership' && membershipId) {
+      body.membershipId = membershipId;
+      if (isSplitPayment) body.secondaryPaymentMethod = secondaryPaymentMethod;
+    }
+    fetch(`${API}/invoices/${id}/pay`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then((r) => r.json())
-      .then((d) => d.success && setInvoice(d.data))
+      .then((d) => {
+        if (d.success) setInvoice(d.data);
+        else setPayError(d.error || 'Payment failed');
+      })
       .finally(() => setPaying(false));
   };
 
   if (!invoice) return <div className="text-slate-500">Loading...</div>;
+  if (invoice.notFound) return (
+    <div className="text-center py-12">
+      <p className="text-slate-600 mb-4">Invoice not found.</p>
+      <button onClick={() => navigate('/invoices')} className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700">← Back to Invoices</button>
+    </div>
+  );
 
   const taxPercent = Number(invoice.tax_percent) || 18;
   const cgstRate = taxPercent / 2;
@@ -40,26 +82,77 @@ export default function InvoiceView() {
   const sgstAmount = Number(invoice.tax_amount) / 2;
   const subtotal = Number(invoice.subtotal);
   const total = Number(invoice.total);
+  const membershipBalance = activeMembership
+    ? (Number(activeMembership.remaining_balance) || Number(activeMembership.initial_balance)) ||
+      ((activeMembership.usage_count ?? 0) === 0 ? (Number(activeMembership.plan_price) || Number(activeMembership.special_price) || 0) : 0)
+    : 0;
+  const canPayPartialFromMembership = invoice.status === 'pending' && activeMembership && membershipBalance > 0;
+  const splitAmountFromMembership = Math.min(membershipBalance, total);
+  const splitRemainder = Math.max(0, total - membershipBalance);
+  const amountFromMembership = paymentMethod === 'membership' ? splitAmountFromMembership : 0;
+  const remainderToPay = paymentMethod === 'membership' ? splitRemainder : 0;
+  const isSplitPayment = paymentMethod === 'membership' && splitRemainder > 0;
 
   return (
     <div>
       <div className="mb-6 flex gap-2 no-print">
-        <button onClick={() => navigate('/')} className="px-4 py-2 border rounded-lg hover:bg-slate-100">← Back</button>
+        <button onClick={() => navigate('/invoices')} className="px-4 py-2 border rounded-lg hover:bg-slate-100">← Back to Invoices</button>
         <button onClick={() => window.print()} className="px-4 py-2 bg-slate-800 text-white rounded-lg">Print</button>
         {invoice.status === 'pending' && (
-          <div className="flex items-center gap-2">
-            <select
-              value={paymentMethod}
-              onChange={(e) => setPaymentMethod(e.target.value)}
-              className="px-3 py-2 border rounded-lg text-sm"
-            >
-              <option value="cash">Cash</option>
-              <option value="UPI">UPI</option>
-              <option value="Card">Card</option>
-            </select>
-            <button onClick={markPaid} disabled={paying} className="px-4 py-2 bg-green-600 text-white rounded-lg disabled:opacity-50">
-              {paying ? '...' : 'Mark Paid'}
-            </button>
+          <div className="flex flex-col gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+            <p className="text-sm font-medium text-slate-700">Mark as Paid</p>
+            {activeMembership ? (
+              <>
+                <p className="text-sm text-slate-600">
+                  Customer has membership <strong>{activeMembership.customer_phone || `MEM-${activeMembership.id}`}</strong> · Balance: {formatINR(membershipBalance)} · Uses: {activeMembership.usage_count ?? 0}
+                </p>
+                <p className="text-xs text-amber-700">
+                  {membershipBalance >= total
+                    ? `Select Pay from Membership to deduct full ${formatINR(total)} (incl. GST) from balance.`
+                    : membershipBalance > 0
+                    ? `Use ${formatINR(splitAmountFromMembership)} from membership + pay remaining ${formatINR(splitRemainder)} by Cash/UPI/Card.`
+                    : 'Select payment method and click Mark Paid.'}
+                </p>
+              </>
+            ) : (
+              <p className="text-xs text-slate-500">Select payment method and click Mark Paid.</p>
+            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={paymentMethod}
+                onChange={(e) => { setPaymentMethod(e.target.value); setPayError(''); }}
+                className="px-3 py-2 border rounded-lg text-sm"
+              >
+                {activeMembership && canPayPartialFromMembership && (
+                  <option value="membership">
+                    Pay from Membership ({activeMembership.customer_phone || `MEM-${activeMembership.id}`}) – ₹{membershipBalance.toFixed(0)} available
+                  </option>
+                )}
+                <option value="cash">Cash</option>
+                <option value="UPI">UPI</option>
+                <option value="Card">Card</option>
+              </select>
+              {isSplitPayment && (
+                <select
+                  value={secondaryPaymentMethod}
+                  onChange={(e) => { setSecondaryPaymentMethod(e.target.value); setPayError(''); }}
+                  className="px-3 py-2 border rounded-lg text-sm"
+                  title="Pay remaining amount by"
+                >
+                  <option value="cash">+ Cash (₹{remainderToPay.toFixed(0)})</option>
+                  <option value="UPI">+ UPI (₹{remainderToPay.toFixed(0)})</option>
+                  <option value="Card">+ Card (₹{remainderToPay.toFixed(0)})</option>
+                </select>
+              )}
+              <button
+                onClick={markPaid}
+                disabled={paying || (paymentMethod === 'membership' && !canPayPartialFromMembership)}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg disabled:opacity-50"
+              >
+                {paying ? '...' : 'Mark Paid'}
+              </button>
+              {payError && <span className="text-red-600 text-sm">{payError}</span>}
+            </div>
           </div>
         )}
       </div>
@@ -147,7 +240,16 @@ export default function InvoiceView() {
         {invoice.status === 'paid' && (
           <div className="mt-6 p-3 bg-green-50 rounded-lg text-green-800 text-sm">
             Paid on {invoice.paid_at ? new Date(invoice.paid_at).toLocaleDateString('en-IN') : '–'}
-            {invoice.payment_method && ` (${invoice.payment_method})`}
+            {invoice.payment_method && (
+              <span>
+                {' '}
+                {String(invoice.payment_method).toLowerCase().startsWith('membership')
+                  ? invoice.amount_from_membership > 0 && invoice.secondary_payment_method
+                    ? `(Membership ₹${Number(invoice.amount_from_membership).toFixed(0)} + ${invoice.secondary_payment_method} ₹${(Number(invoice.total) - Number(invoice.amount_from_membership)).toFixed(0)})`
+                    : `(Membership)`
+                  : `(${invoice.payment_method})`}
+              </span>
+            )}
           </div>
         )}
       </div>

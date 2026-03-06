@@ -42,6 +42,23 @@ psql salon_db < server/db/migrations/add-admins.sql
 psql salon_db < server/db/migrations/001-staff-memberships-clients.sql
 ```
 
+**Inventory, Digital Catalog, CRM, Staff Management, Membership enhancements:**
+```bash
+psql salon_db < server/db/migrations/002-inventory-products.sql
+psql salon_db < server/db/migrations/003-digital-catalog.sql
+psql salon_db < server/db/seed-services.sql
+psql salon_db < server/db/migrations/004-crm.sql
+psql salon_db < server/db/migrations/005-staff-management.sql
+psql salon_db < server/db/migrations/006-membership-enhancements.sql
+psql salon_db < server/db/migrations/007-membership-tracking-renewal.sql
+psql salon_db < server/db/migrations/008-value-based-membership.sql
+psql salon_db < server/db/migrations/009-fix-membership-balance-backfill.sql
+psql salon_db < server/db/migrations/010-split-payment-membership.sql
+psql salon_db < server/db/migrations/011-expenses.sql
+```
+
+See `FEATURES_IMPLEMENTATION_PLAN.md` for the full roadmap.
+
 ### 2. Backend
 
 ```bash

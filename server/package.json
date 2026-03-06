@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "migrate:010": "node run-migration-010.js",
+    "migrate:011": "node run-migration-011.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

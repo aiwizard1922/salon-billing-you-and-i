@@ -21,6 +21,8 @@ export default function NewInvoice() {
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [activeMembership, setActiveMembership] = useState(null);
+  const [activeMembershipWithBalance, setActiveMembershipWithBalance] = useState(null);
 
   useEffect(() => {
     fetch(`${API}/customers`).then((r) => r.json()).then((d) => d.success && setCustomers(d.data));
@@ -33,6 +35,21 @@ export default function NewInvoice() {
       setCustomerId(preset);
     }
   }, [preset]);
+
+  useEffect(() => {
+    if (customerMode === 'existing' && customerId) {
+      Promise.all([
+        fetch(`${API}/membership/for-customer?customerId=${customerId}`).then((r) => r.json()),
+        fetch(`${API}/membership/active?customerId=${customerId}`).then((r) => r.json()),
+      ]).then(([fc, ac]) => {
+        setActiveMembership(fc.data || null);
+        setActiveMembershipWithBalance(ac.data || null);
+      });
+    } else {
+      setActiveMembership(null);
+      setActiveMembershipWithBalance(null);
+    }
+  }, [customerMode, customerId]);
 
   const lookupByPhone = (phone) => {
     const digits = String(phone || '').replace(/\D/g, '');
@@ -65,9 +82,13 @@ export default function NewInvoice() {
     setItems(next);
   };
 
-  const subtotal = items.reduce((s, i) => s + Number(i.unit_price || 0) * (i.quantity || 1), 0);
-  const tax = (subtotal * taxPercent) / 100;
-  const total = subtotal + tax;
+  const rawSubtotal = items.reduce((s, i) => s + Number(i.unit_price || 0) * (i.quantity || 1), 0);
+  const tax = (rawSubtotal * taxPercent) / 100;
+  const total = rawSubtotal + tax;
+  const membershipBalance = activeMembershipWithBalance
+    ? (Number(activeMembershipWithBalance.remaining_balance) ?? Number(activeMembershipWithBalance.initial_balance) ?? 0)
+    : 0;
+  const canPayFromMembership = customerMode === 'existing' && activeMembershipWithBalance && membershipBalance >= total;
 
   const canSubmit = () => {
     const hasItems = items.some((i) => i.service_name?.trim());
@@ -75,8 +96,8 @@ export default function NewInvoice() {
     return newCustomer.name?.trim() && newCustomer.phone?.trim() && hasItems;
   };
 
-  const submit = (e) => {
-    e.preventDefault();
+  const submit = (e, payFromMembership = false) => {
+    e?.preventDefault?.();
     if (!canSubmit()) return;
     setError('');
     setLoading(true);
@@ -102,8 +123,32 @@ export default function NewInvoice() {
         } catch {
           throw new Error(r.ok ? 'Invalid response' : 'Server error – is the backend running?');
         }
-        if (d.success) navigate(`/invoices/${d.data.id}`);
-        else setError(d.error || 'Failed to create invoice');
+        if (!d.success) {
+          setError(d.error || 'Failed to create invoice');
+          return;
+        }
+        const invoiceId = d.data.id;
+        if (payFromMembership && activeMembershipWithBalance && membershipBalance >= Number(d.data.total)) {
+          return fetch(`${API}/invoices/${invoiceId}/pay`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paymentMethod: 'membership', membershipId: activeMembershipWithBalance.id }),
+          })
+            .then((r2) => r2.json())
+            .then((d2) => {
+              if (d2.success) {
+                navigate(`/invoices/${invoiceId}`);
+              } else {
+                setError(d2.error || 'Invoice created but payment failed. You can pay from the invoice view.');
+                setTimeout(() => navigate(`/invoices/${invoiceId}`), 2000);
+              }
+            })
+            .catch(() => {
+              setError('Invoice created. Go to the invoice to mark as paid from membership.');
+              setTimeout(() => navigate(`/invoices/${invoiceId}`), 2000);
+            });
+        }
+        navigate(`/invoices/${invoiceId}`);
       })
       .catch((err) => setError(err.message || 'Request failed'))
       .finally(() => setLoading(false));
@@ -112,7 +157,7 @@ export default function NewInvoice() {
   return (
     <div>
       <h2 className="text-2xl font-bold text-slate-800 mb-6">New Invoice</h2>
-      <form onSubmit={submit} className="bg-white rounded-xl shadow p-6">
+      <form onSubmit={(e) => submit(e, false)} className="bg-white rounded-xl shadow p-6">
         {error && (
           <div className="mb-6 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
             {error}
@@ -140,6 +185,16 @@ export default function NewInvoice() {
               <span>Select existing</span>
             </label>
           </div>
+          {customerMode === 'existing' && activeMembership && (
+            <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+              <strong>Membership {activeMembership.customer_phone || `MEM-${activeMembership.id}`}</strong> · Balance: {formatINR(
+                (Number(activeMembership.remaining_balance) || Number(activeMembership.initial_balance)) ||
+                ((activeMembership.usage_count ?? 0) === 0 ? (Number(activeMembership.plan_price) || Number(activeMembership.special_price) || 0) : 0)
+              )} · Uses: {activeMembership.usage_count ?? 0}
+              <br />
+              <span className="text-amber-700">Pay from membership when marking invoice as paid.</span>
+            </div>
+          )}
           {customerMode === 'existing' ? (
             <select
               value={customerId}
@@ -216,12 +271,20 @@ export default function NewInvoice() {
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border rounded px-3 py-2" rows={2} />
         </div>
         <div className="border-t pt-4 mb-6">
-          <div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{formatINR(subtotal)}</span></div>
+          <div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{formatINR(rawSubtotal)}</span></div>
           <div className="flex justify-between text-slate-600"><span>GST ({taxPercent}% – CGST {taxPercent/2}% + SGST {taxPercent/2}%)</span><span>{formatINR(tax)}</span></div>
           <div className="flex justify-between font-bold text-lg mt-2"><span>Total</span><span>{formatINR(total)}</span></div>
+          <p className="text-xs text-slate-500 mt-2">
+            {canPayFromMembership ? `Membership balance (₹${membershipBalance.toFixed(0)}) will be deducted (includes GST).` : 'Customer can pay from membership when marking invoice as paid.'}
+          </p>
         </div>
-        <div className="flex gap-2 items-center">
-          <button type="submit" disabled={loading || !canSubmit()} className="px-6 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50" title={!canSubmit() ? 'Fill customer details and add at least one service' : ''}>{loading ? 'Creating...' : 'Create Invoice'}</button>
+        <div className="flex gap-2 items-center flex-wrap">
+          <button type="submit" disabled={loading || !canSubmit()} onClick={(e) => submit(e, false)} className="px-6 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50" title={!canSubmit() ? 'Fill customer details and add at least one service' : ''}>{loading ? 'Creating...' : 'Create Invoice'}</button>
+          {canPayFromMembership && (
+            <button type="button" disabled={loading || !canSubmit()} onClick={(e) => submit(e, true)} className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50">
+              {loading ? 'Creating...' : 'Create & Pay from Membership'}
+            </button>
+          )}
           {!canSubmit() && (newCustomer.name || newCustomer.phone || customerId) && !items.some((i) => i.service_name?.trim()) && (
             <span className="text-sm text-amber-600">Add at least one service below</span>
           )}

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Users, Phone, Pencil } from 'lucide-react';
+import { Plus, Users, Phone, Pencil, User } from 'lucide-react';
 
 const API = '/api';
 
@@ -141,6 +141,9 @@ export default function Customers() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                <Link to={`/customers/${c.id}`} className="p-1.5 text-slate-500 hover:text-blue-600" title="View profile">
+                  <User size={16} />
+                </Link>
                 <button onClick={() => startEdit(c)} className="p-1.5 text-slate-500 hover:text-amber-600" title="Edit">
                   <Pencil size={16} />
                 </button>

@@ -48,6 +48,13 @@ async function sendPaymentReceipt({ customerPhone, customerName, invoiceNumber, 
   return sendText(customerPhone, `Thank you for your payment, ${customerName || 'Customer'}!\n\n✅ Invoice: ${invoiceNumber}\n💰 Amount: ₹${Number(amount).toFixed(2)}\n\nThank you for choosing us!`);
 }
 
+async function sendMembershipExpiryReminder({ customerPhone, customerName, planName, endDate, daysLeft }) {
+  return sendText(
+    customerPhone,
+    `Hi ${customerName || 'Valued Customer'}!\n\n⏰ Your *${planName || 'membership'}* is expiring in ${daysLeft} days (${endDate}).\n\nRenew or upgrade now to continue enjoying your benefits. Visit us or contact us to renew easily!\n\nWe look forward to serving you. 💇`
+  );
+}
+
 /** Personalize message: replaces {{name}} with customer name */
 function personalizeMessage(template, customerName) {
   const name = customerName || 'Valued Customer';
@@ -87,6 +94,7 @@ module.exports = {
   sendText,
   sendAppointmentConfirmation,
   sendPaymentReceipt,
+  sendMembershipExpiryReminder,
   sendBulkMarketing,
   personalizeMessage,
 };

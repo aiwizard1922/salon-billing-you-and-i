@@ -102,7 +102,10 @@ async function getInvoices(filters = {}) {
   const params = [];
   let idx = 1;
   if (filters.status) { query += ` AND i.status = $${idx}`; params.push(filters.status); idx++; }
-  query += ' ORDER BY i.invoice_date DESC';
+  if (filters.membershipOnly) {
+    query += ` AND (LOWER(COALESCE(i.payment_method, '')) LIKE 'membership%' OR COALESCE(i.amount_from_membership, 0) > 0)`;
+  }
+  query += ' ORDER BY i.id DESC';
   const res = await pool.query(query, params);
   return res.rows;
 }
@@ -127,16 +130,16 @@ async function getNextInvoiceNumber() {
   return `INV-${String(num + 1).padStart(3, '0')}`;
 }
 
-async function createInvoice({ customerId, items, taxPercent = 5, appointmentId, notes }) {
+async function createInvoice({ customerId, items, taxPercent = 5, appointmentId, notes, staffId }) {
   const invoiceNumber = await getNextInvoiceNumber();
   const subtotal = items.reduce((s, i) => s + Number(i.unit_price) * (i.quantity || 1), 0);
   const taxAmount = (subtotal * taxPercent) / 100;
   const total = subtotal + taxAmount;
 
   const inv = await pool.query(
-    `INSERT INTO invoices (customer_id, invoice_number, subtotal, tax_percent, tax_amount, total, appointment_id, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [customerId, invoiceNumber, subtotal, taxPercent, taxAmount, total, appointmentId || null, notes || null]
+    `INSERT INTO invoices (customer_id, invoice_number, subtotal, tax_percent, tax_amount, total, appointment_id, notes, staff_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [customerId, invoiceNumber, subtotal, taxPercent, taxAmount, total, appointmentId || null, notes || null, staffId || null]
   );
 
   for (const item of items) {
@@ -149,10 +152,13 @@ async function createInvoice({ customerId, items, taxPercent = 5, appointmentId,
   return getInvoiceById(inv.rows[0].id);
 }
 
-async function markInvoicePaid(id, paymentMethod) {
+async function markInvoicePaid(id, paymentMethod, { amountFromMembership = null, secondaryPaymentMethod = null } = {}) {
   await pool.query(
-    "UPDATE invoices SET status = 'paid', payment_method = $1, paid_at = NOW() WHERE id = $2",
-    [paymentMethod || 'cash', id]
+    `UPDATE invoices SET status = 'paid', payment_method = $1, paid_at = NOW(),
+     amount_from_membership = COALESCE($2, amount_from_membership),
+     secondary_payment_method = $3
+     WHERE id = $4`,
+    [paymentMethod || 'cash', amountFromMembership, secondaryPaymentMethod, id]
   );
   return getInvoiceById(id);
 }
@@ -199,9 +205,21 @@ async function getMonthlySales(months = 12) {
 async function getDailySalesByMethod(days = 30) {
   const res = await pool.query(
     `SELECT DATE(paid_at) as date,
-       COALESCE(SUM(CASE WHEN LOWER(COALESCE(payment_method, 'cash')) LIKE 'cash' THEN total END), 0)::numeric as cash,
-       COALESCE(SUM(CASE WHEN LOWER(COALESCE(payment_method, '')) LIKE 'upi' THEN total END), 0)::numeric as upi,
-       COALESCE(SUM(CASE WHEN LOWER(COALESCE(payment_method, '')) LIKE 'card' THEN total END), 0)::numeric as card
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, 'cash')) = 'cash' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'cash' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as cash,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, '')) = 'upi' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'upi' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as upi,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, '')) = 'card' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'card' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as card
      FROM invoices
      WHERE status = 'paid' AND paid_at >= CURRENT_DATE - INTERVAL '1 day' * $1
      GROUP BY DATE(paid_at)
@@ -220,9 +238,21 @@ async function getDailySalesByMethod(days = 30) {
 async function getMonthlySalesByMethod(months = 12) {
   const res = await pool.query(
     `SELECT TO_CHAR(paid_at, 'YYYY-MM') as month,
-       COALESCE(SUM(CASE WHEN LOWER(COALESCE(payment_method, 'cash')) LIKE 'cash' THEN total END), 0)::numeric as cash,
-       COALESCE(SUM(CASE WHEN LOWER(COALESCE(payment_method, '')) LIKE 'upi' THEN total END), 0)::numeric as upi,
-       COALESCE(SUM(CASE WHEN LOWER(COALESCE(payment_method, '')) LIKE 'card' THEN total END), 0)::numeric as card
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, 'cash')) = 'cash' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'cash' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as cash,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, '')) = 'upi' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'upi' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as upi,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, '')) = 'card' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'card' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as card
      FROM invoices
      WHERE status = 'paid' AND paid_at >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month' * $1
      GROUP BY TO_CHAR(paid_at, 'YYYY-MM')
@@ -288,20 +318,22 @@ async function getMembershipPlanById(id) {
   return res.rows[0] || null;
 }
 
-async function createMembershipPlan({ name, durationDays, price, benefits }) {
+async function createMembershipPlan({ name, durationDays, price, benefits, discountPercent, applyAtCheckout, specialPrice }) {
   const res = await pool.query(
-    `INSERT INTO membership_plans (name, duration_days, price, benefits)
-     VALUES ($1, $2, $3, $4) RETURNING *`,
-    [name || '', durationDays ?? 30, price ?? 0, benefits || null]
+    `INSERT INTO membership_plans (name, duration_days, price, benefits, discount_percent, apply_at_checkout, special_price)
+     VALUES ($1, $2, $3, $4, COALESCE($5, 0), COALESCE($6, TRUE), $7) RETURNING *`,
+    [name || '', durationDays ?? null, price ?? 0, benefits || null, discountPercent ?? 0, applyAtCheckout ?? true, specialPrice || null]
   );
   return res.rows[0];
 }
 
-async function updateMembershipPlan(id, { name, durationDays, price, benefits, isActive }) {
+async function updateMembershipPlan(id, { name, durationDays, price, benefits, isActive, discountPercent, applyAtCheckout, specialPrice }) {
   await pool.query(
     `UPDATE membership_plans SET name = COALESCE($1, name), duration_days = COALESCE($2, duration_days),
-     price = COALESCE($3, price), benefits = COALESCE($4, benefits), is_active = COALESCE($5, is_active), updated_at = NOW() WHERE id = $6`,
-    [name, durationDays, price, benefits, isActive, id]
+     price = COALESCE($3, price), benefits = COALESCE($4, benefits), is_active = COALESCE($5, is_active),
+     discount_percent = COALESCE($6, discount_percent), apply_at_checkout = COALESCE($7, apply_at_checkout),
+     special_price = COALESCE($8, special_price), updated_at = NOW() WHERE id = $9`,
+    [name, durationDays, price, benefits, isActive, discountPercent, applyAtCheckout, specialPrice, id]
   );
   return getMembershipPlanById(id);
 }
@@ -309,7 +341,7 @@ async function updateMembershipPlan(id, { name, durationDays, price, benefits, i
 // --- Customer memberships ---
 async function getCustomerMemberships(customerId = null, status = null) {
   let query = `
-    SELECT cm.*, mp.name as plan_name, mp.duration_days, mp.price as plan_price, c.name as customer_name
+    SELECT cm.*, mp.name as plan_name, mp.duration_days, mp.price as plan_price, c.name as customer_name, c.phone as customer_phone
     FROM customer_memberships cm
     JOIN membership_plans mp ON cm.plan_id = mp.id
     JOIN customers c ON cm.customer_id = c.id
@@ -319,18 +351,87 @@ async function getCustomerMemberships(customerId = null, status = null) {
   let idx = 1;
   if (customerId) { query += ` AND cm.customer_id = $${idx}`; params.push(customerId); idx++; }
   if (status) { query += ` AND cm.status = $${idx}`; params.push(status); idx++; }
-  query += ' ORDER BY cm.end_date DESC';
+  query += ' ORDER BY cm.id DESC';
   const res = await pool.query(query, params);
   return res.rows;
 }
 
-async function assignMembershipToCustomer({ customerId, planId, startDate, endDate, notes }) {
+async function assignMembershipToCustomer({ customerId, planId, startDate, endDate, notes, creditAmount }) {
+  // Value-based: creditAmount = plan price (what they pay = credit they get)
+  // Use CURRENT_DATE for dates when null (works even if migration 008 not run - columns may still be NOT NULL)
+  const start = startDate || new Date().toISOString().slice(0, 10);
+  const end = endDate || start; // placeholder; validity is based on remaining_balance only
+  const credit = Number(creditAmount) || 0;
   const res = await pool.query(
-    `INSERT INTO customer_memberships (customer_id, plan_id, start_date, end_date, notes)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [customerId, planId, startDate, endDate || null, notes || null]
+    `INSERT INTO customer_memberships (customer_id, plan_id, start_date, end_date, initial_balance, remaining_balance, status, notes)
+     VALUES ($1, $2, $3, $4, $5, $5, 'active', $6) RETURNING *`,
+    [customerId, planId, start, end, credit, notes || null]
   );
   return res.rows[0];
+}
+
+async function getActiveMembershipForCustomer(customerId) {
+  const res = await pool.query(
+    `SELECT cm.*, mp.name as plan_name, mp.discount_percent, mp.apply_at_checkout, mp.price as plan_price, mp.staff_commission_percent, c.phone as customer_phone
+     FROM customer_memberships cm
+     JOIN membership_plans mp ON cm.plan_id = mp.id
+     JOIN customers c ON cm.customer_id = c.id
+     WHERE cm.customer_id = $1 AND cm.status = 'active' AND COALESCE(cm.remaining_balance, 0) > 0
+     ORDER BY cm.id DESC LIMIT 1`,
+    [customerId]
+  );
+  return res.rows[0] || null;
+}
+
+async function getMembershipByIdAndCustomer(membershipId, customerId) {
+  const res = await pool.query(
+    `SELECT cm.*, mp.name as plan_name, mp.staff_commission_percent, mp.price as plan_price, mp.special_price, c.phone as customer_phone
+     FROM customer_memberships cm
+     JOIN membership_plans mp ON cm.plan_id = mp.id
+     JOIN customers c ON cm.customer_id = c.id
+     WHERE cm.id = $1 AND cm.customer_id = $2 AND COALESCE(cm.remaining_balance, 0) > 0`,
+    [membershipId, customerId]
+  );
+  return res.rows[0] || null;
+}
+
+async function getMembershipByIdAndCustomerAllowZeroBalance(membershipId, customerId) {
+  const res = await pool.query(
+    `SELECT cm.*, mp.name as plan_name, mp.staff_commission_percent, mp.price as plan_price, mp.special_price, c.phone as customer_phone
+     FROM customer_memberships cm
+     JOIN membership_plans mp ON cm.plan_id = mp.id
+     JOIN customers c ON cm.customer_id = c.id
+     WHERE cm.id = $1 AND cm.customer_id = $2`,
+    [membershipId, customerId]
+  );
+  return res.rows[0] || null;
+}
+
+async function repairMembershipBalanceIfNeeded(membership) {
+  if (!membership) return null;
+  const usageCount = Number(membership.usage_count) || 0;
+  const balance = Number(membership.remaining_balance) ?? Number(membership.initial_balance);
+  if (usageCount !== 0 || (balance != null && balance > 0)) return membership;
+  const creditAmount = Number(membership.special_price ?? membership.plan_price) || 0;
+  if (creditAmount <= 0) return null;
+  await pool.query(
+    `UPDATE customer_memberships SET initial_balance = $1, remaining_balance = $1 WHERE id = $2`,
+    [creditAmount, membership.id]
+  );
+  return { ...membership, remaining_balance: creditAmount, initial_balance: creditAmount };
+}
+
+async function getLatestMembershipForCustomer(customerId) {
+  const res = await pool.query(
+    `SELECT cm.*, mp.name as plan_name, mp.price as plan_price, mp.special_price, c.phone as customer_phone
+     FROM customer_memberships cm
+     JOIN membership_plans mp ON cm.plan_id = mp.id
+     JOIN customers c ON cm.customer_id = c.id
+     WHERE cm.customer_id = $1
+     ORDER BY cm.id DESC LIMIT 1`,
+    [customerId]
+  );
+  return res.rows[0] || null;
 }
 
 // --- Client analytics (visits, new vs returning, gender breakdown) ---
@@ -431,6 +532,11 @@ module.exports = {
   updateMembershipPlan,
   getCustomerMemberships,
   assignMembershipToCustomer,
+  getActiveMembershipForCustomer,
+  getMembershipByIdAndCustomer,
+  getMembershipByIdAndCustomerAllowZeroBalance,
+  repairMembershipBalanceIfNeeded,
+  getLatestMembershipForCustomer,
   getClientAnalytics,
   getAppointments,
   createAppointment,
