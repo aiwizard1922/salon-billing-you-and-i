@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Animation</title>
+  <style>
+    * { margin: 0; padding: 0; }
+    body {
+      overflow: hidden;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0a0a0f;
+    }
+    #canvas-container {
+      width: 100vw;
+      height: 100vh;
+      position: relative;
+    }
+    h1 {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(255, 255, 255, 0.9);
+      font-size: clamp(2rem, 5vw, 4rem);
+      font-weight: 300;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      z-index: 10;
+      pointer-events: none;
+    }
+    .subtitle {
+      position: absolute;
+      top: 58%;
+      left: 50%;
+      transform: translate(-50%, 0);
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 0.9rem;
+      letter-spacing: 0.4em;
+      z-index: 10;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  <h1>3D World</h1>
+  <p class="subtitle">Click & drag to explore</p>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
