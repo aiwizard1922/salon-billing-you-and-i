@@ -10,6 +10,7 @@ import {
   Legend,
 } from 'recharts';
 import { formatINR } from '../utils/formatCurrency';
+import { istMonthStr } from '../utils/ist';
 
 const API = '/api';
 
@@ -61,11 +62,7 @@ export default function Reports() {
   };
   const formatRupee = (v) => formatINR(v, v >= 1000 ? 0 : 2);
 
-  const thisMonth = monthlyByMethod.find((m) => {
-    const now = new Date();
-    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    return m.month === month;
-  });
+  const thisMonth = monthlyByMethod.find((m) => m.month === istMonthStr());
   const monthTotal = thisMonth ? thisMonth.cash + thisMonth.upi + thisMonth.card : 0;
 
   return (

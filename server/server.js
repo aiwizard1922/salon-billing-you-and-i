@@ -117,6 +117,8 @@ app.get('/api/shop', (req, res) => {
     data: {
       name: process.env.BUSINESS_NAME || 'Salon',
       address: process.env.BUSINESS_ADDRESS || '',
+      phone: process.env.BUSINESS_PHONE || '',
+      email: process.env.BUSINESS_EMAIL || '',
       gstin: process.env.BUSINESS_GSTIN || '',
       state: process.env.BUSINESS_STATE || '',
     },
@@ -238,14 +240,14 @@ app.get('/api/invoices/:id', async (req, res) => {
 
 app.post('/api/invoices', async (req, res) => {
   try {
-    const { customerId, customer, items, taxPercent, appointmentId, notes, staffId } = req.body;
+    const { customerId, customer, items, taxPercent, discountPercent, appointmentId, notes, staffId } = req.body;
     const hasItems = Array.isArray(items) && items.length > 0 && items.some((i) => i?.service_name?.trim());
     if (!hasItems) {
       return res.status(400).json({ success: false, error: 'Add at least one service with a name (e.g. Hair Cut, Facial)' });
     }
     let resolvedCustomerId = customerId ? Number(customerId) : null;
     if (customer && String(customer.name || '').trim() && String(customer.phone || '').trim()) {
-      const c = await db.findOrCreateCustomer({ name: customer.name.trim(), phone: customer.phone.trim() });
+      const c = await db.findOrCreateCustomer({ name: customer.name.trim(), phone: customer.phone.trim(), gender: customer.gender || null });
       if (!c) return res.status(400).json({ success: false, error: 'Could not create or find customer' });
       resolvedCustomerId = c.id;
     }
@@ -256,6 +258,7 @@ app.post('/api/invoices', async (req, res) => {
       customerId: Number(resolvedCustomerId),
       items,
       taxPercent: taxPercent ?? 5,
+      discountPercent: req.body.discountPercent ?? 0,
       appointmentId,
       notes,
       staffId: staffId ? Number(staffId) : null,
@@ -372,6 +375,18 @@ app.put('/api/staff/:id', async (req, res) => {
     const { name, phone, email, role, joinDate, notes, isActive } = req.body;
     const data = await db.updateStaff(Number(req.params.id), { name, phone, email, role, joinDate, notes, isActive });
     if (!data) return res.status(404).json({ success: false, error: 'Not found' });
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/staff/work-history', async (req, res) => {
+  try {
+    const staffId = req.query.staffId ? Number(req.query.staffId) : null;
+    const from = req.query.from || null;
+    const to = req.query.to || null;
+    const data = await db.getStaffWorkHistory({ staffId, from, to });
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -882,6 +897,96 @@ app.get('/api/analytics/clients', async (req, res) => {
     const month = req.query.month || null;
     const data = await db.getClientAnalytics(month);
     res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Debug: inspect invoice dates for a month (helps diagnose Feb showing 0)
+app.get('/api/analytics/clients/debug', async (req, res) => {
+  try {
+    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    const startDate = `${month}-01`;
+    const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0).toISOString().slice(0, 10);
+    const r = await db.pool.query(
+      `SELECT id, invoice_number, invoice_date, created_at,
+        (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date AS created_ist,
+        (created_at AT TIME ZONE 'Asia/Kolkata')::date AS created_local
+       FROM invoices
+       WHERE invoice_date >= $1 AND invoice_date <= $2
+          OR (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= $1 AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= $2
+          OR (created_at AT TIME ZONE 'Asia/Kolkata')::date >= $1 AND (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $2
+       ORDER BY id LIMIT 20`,
+      [startDate, endDate]
+    );
+    res.json({ success: true, month, startDate, endDate, count: r.rows.length, sample: r.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Debug: see raw invoice dates for a month (helps diagnose Feb showing 0)
+app.get('/api/analytics/clients/debug', async (req, res) => {
+  try {
+    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    const startDate = `${month}-01`;
+    const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0).toISOString().slice(0, 10);
+    const r = await db.pool.query(
+      `SELECT id, invoice_number, invoice_date, created_at,
+        (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date AS created_ist,
+        (created_at AT TIME ZONE 'Asia/Kolkata')::date AS created_local
+       FROM invoices
+       WHERE invoice_date >= $1 AND invoice_date <= $2
+          OR (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= $1 AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= $2
+          OR (created_at AT TIME ZONE 'Asia/Kolkata')::date >= $1 AND (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $2`,
+      [startDate, endDate]
+    );
+    res.json({ success: true, month, startDate, endDate, count: r.rows.length, invoices: r.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Debug: see raw invoice dates for a month (helps diagnose Feb showing 0)
+app.get('/api/analytics/clients/debug', async (req, res) => {
+  try {
+    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    const startDate = `${month}-01`;
+    const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0).toISOString().slice(0, 10);
+    const r = await db.pool.query(
+      `SELECT id, invoice_number, invoice_date, created_at,
+        (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date AS created_utc_ist,
+        (created_at AT TIME ZONE 'Asia/Kolkata')::date AS created_local
+       FROM invoices
+       WHERE invoice_date >= $1 AND invoice_date <= $2
+          OR (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= $1 AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= $2
+          OR (created_at AT TIME ZONE 'Asia/Kolkata')::date >= $1 AND (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $2`,
+      [startDate, endDate]
+    );
+    res.json({ success: true, month, startDate, endDate, count: r.rows.length, invoices: r.rows });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Debug: see raw invoice dates for a month (helps diagnose Feb showing 0)
+app.get('/api/analytics/clients/debug', async (req, res) => {
+  try {
+    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    const startDate = `${month}-01`;
+    const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0).toISOString().slice(0, 10);
+    const { pool } = require('./database');
+    const r = await pool.query(
+      `SELECT id, invoice_number, invoice_date, created_at,
+        (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date AS created_ist,
+        (created_at AT TIME ZONE 'Asia/Kolkata')::date AS created_local
+       FROM invoices
+       WHERE invoice_date >= $1 AND invoice_date <= $2
+          OR (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date >= $1 AND (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date <= $2
+          OR (created_at AT TIME ZONE 'Asia/Kolkata')::date >= $1 AND (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $2`,
+      [startDate, endDate]
+    );
+    res.json({ success: true, month, startDate, endDate, count: r.rows.length, invoices: r.rows });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

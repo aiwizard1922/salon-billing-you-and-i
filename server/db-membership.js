@@ -11,7 +11,8 @@ async function recordMembershipRedemption({ customerMembershipId, invoiceId, amo
     `UPDATE customer_memberships SET
        usage_count = COALESCE(usage_count, 0) + 1,
        remaining_balance = GREATEST(0, COALESCE(remaining_balance, 0) - $1),
-       status = CASE WHEN COALESCE(remaining_balance, 0) - $1 <= 0 THEN 'expired' ELSE status END
+       status = CASE WHEN COALESCE(remaining_balance, 0) - $1 <= 0 THEN 'expired' ELSE status END,
+       end_date = CASE WHEN COALESCE(remaining_balance, 0) - $1 <= 0 THEN CURRENT_DATE ELSE end_date END
      WHERE id = $2`,
     [amountRedeemed, customerMembershipId]
   );
@@ -66,12 +67,15 @@ async function upgradeMembership(customerMembershipId, newPlanId) {
   if (!plan) return null;
   const current = await pool.query('SELECT * FROM customer_memberships WHERE id = $1', [customerMembershipId]).then((r) => r.rows[0]);
   if (!current) return null;
-  const creditAmount = Number(plan.special_price ?? plan.price) || 0;
+  const newPlanCredit = Number(plan.special_price ?? plan.price) || 0;
+  const oldBalance = Number(current.remaining_balance ?? current.initial_balance ?? 0) || 0;
+  const totalCredit = newPlanCredit + oldBalance;
   await pool.query('UPDATE customer_memberships SET status = $1 WHERE id = $2', ['upgraded', customerMembershipId]);
+  const startDate = new Date().toISOString().slice(0, 10);
   const ins = await pool.query(
-    `INSERT INTO customer_memberships (customer_id, plan_id, start_date, end_date, initial_balance, remaining_balance)
-     VALUES ($1, $2, CURRENT_DATE, NULL, $3, $3) RETURNING *`,
-    [current.customer_id, newPlanId, creditAmount]
+    `INSERT INTO customer_memberships (customer_id, plan_id, start_date, end_date, initial_balance, remaining_balance, status)
+     VALUES ($1, $2, $3, $3, $4, $4, 'active') RETURNING *`,
+    [current.customer_id, newPlanId, startDate, totalCredit]
   );
   return ins.rows[0];
 }
@@ -82,7 +86,7 @@ async function topUpMembership(customerMembershipId, amount) {
        remaining_balance = COALESCE(remaining_balance, 0) + $1,
        initial_balance = COALESCE(initial_balance, 0) + $1
      WHERE id = $2 RETURNING *`,
-    [amount, amount, customerMembershipId]
+    [amount, customerMembershipId]
   );
   return res.rows[0] || null;
 }

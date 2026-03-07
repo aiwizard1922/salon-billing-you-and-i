@@ -5,3 +5,23 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Print: hide sidebar, header, buttons; show only invoice content */
+@media print {
+  .no-print,
+  aside,
+  header {
+    display: none !important;
+  }
+  .min-h-screen.flex {
+    display: block !important;
+  }
+  main {
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  body {
+    background: white !important;
+  }
+}

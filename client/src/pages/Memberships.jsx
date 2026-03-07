@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { formatINR } from '../utils/formatCurrency';
 import { Gift, Plus, Users, ArrowUpCircle, Wallet } from 'lucide-react';
+import { istDateStr } from '../utils/ist';
 
 const API = '/api';
 
@@ -15,6 +16,9 @@ export default function Memberships() {
   const [planForm, setPlanForm] = useState({ name: '', price: 0, benefits: '', specialPrice: '' });
   const [assignForm, setAssignForm] = useState({ customerId: '', planId: '' });
   const [assignError, setAssignError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [upgradePlanId, setUpgradePlanId] = useState('');
+  const [topUpAmount, setTopUpAmount] = useState('');
 
   const load = () => {
     Promise.all([
@@ -31,23 +35,53 @@ export default function Memberships() {
   };
 
   const upgrade = (id, planId) => {
+    const pid = Number(planId);
+    if (!pid) {
+      setActionError('Please select a plan.');
+      return;
+    }
+    setActionError('');
     fetch(`${API}/membership/upgrade/${id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planId: Number(planId) }),
+      body: JSON.stringify({ planId: pid }),
     })
       .then((r) => r.json())
-      .then((d) => d.success && (setActionModal(null), load()));
+      .then((d) => {
+        if (d.success) {
+          setActionModal(null);
+          setActionError('');
+          load();
+        } else {
+          setActionError(d.error || 'Upgrade failed');
+        }
+      })
+      .catch((err) => setActionError(err.message || 'Request failed'));
   };
 
   const topUp = (id, amount) => {
+    const amt = parseFloat(amount);
+    if (!amount || isNaN(amt) || amt <= 0) {
+      setActionError('Please enter a valid amount (greater than 0).');
+      return;
+    }
+    setActionError('');
     fetch(`${API}/membership/top-up/${id}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount: parseFloat(amount) }),
+      body: JSON.stringify({ amount: amt }),
     })
       .then((r) => r.json())
-      .then((d) => d.success && (setActionModal(null), load()));
+      .then((d) => {
+        if (d.success) {
+          setActionModal(null);
+          setActionError('');
+          load();
+        } else {
+          setActionError(d.error || 'Top-up failed');
+        }
+      })
+      .catch((err) => setActionError(err.message || 'Request failed'));
   };
 
   useEffect(() => {
@@ -87,7 +121,7 @@ export default function Memberships() {
     const payload = {
       customerId: Number(assignForm.customerId),
       planId: Number(assignForm.planId),
-      startDate: new Date().toISOString().slice(0, 10),
+      startDate: istDateStr(),
     };
     fetch(`${API}/customer-memberships`, {
       method: 'POST',
@@ -317,14 +351,24 @@ export default function Memberships() {
                       {isActive(a) && (
                         <div className="flex gap-1 justify-end">
                           <button
-                            onClick={() => setActionModal({ type: 'upgrade', id: a.id, plans })}
+                            onClick={() => {
+                              setActionError('');
+                              setUpgradePlanId('');
+                              const otherPlans = plans.filter((p) => p.id !== a.plan_id);
+                              setActionModal({ type: 'upgrade', id: a.id, plans: otherPlans, currentPlanId: a.plan_id });
+                              if (otherPlans.length > 0) setUpgradePlanId(String(otherPlans[0].id));
+                            }}
                             className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded"
                             title="Upgrade"
                           >
                             <ArrowUpCircle size={12} />
                           </button>
                           <button
-                            onClick={() => setActionModal({ type: 'topup', id: a.id })}
+                            onClick={() => {
+                              setActionError('');
+                              setTopUpAmount('');
+                              setActionModal({ type: 'topup', id: a.id });
+                            }}
                             className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded"
                             title="Top-up balance"
                           >
@@ -343,27 +387,37 @@ export default function Memberships() {
 
       {/* Action modal */}
       {actionModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setActionModal(null)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => { setActionModal(null); setActionError(''); }}>
           <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            {actionError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{actionError}</div>
+            )}
             {actionModal.type === 'upgrade' && (
               <>
                 <h3 className="font-semibold text-slate-800 mb-4">Upgrade Membership</h3>
+                <p className="text-sm text-slate-500 mb-2">Current plan will be replaced. Remaining balance will be added to the new plan.</p>
                 <select
-                  id="upgradePlan"
+                  value={upgradePlanId}
+                  onChange={(e) => setUpgradePlanId(e.target.value)}
                   className="w-full border rounded-lg px-3 py-2 mb-4"
                 >
+                  <option value="">Select plan</option>
                   {actionModal.plans?.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name} – {formatINR(p.price)}</option>
+                    <option key={p.id} value={p.id}>{p.name} – {formatINR(p.special_price ?? p.price)} credit</option>
                   ))}
                 </select>
+                {(!actionModal.plans || actionModal.plans.length === 0) && (
+                  <p className="text-sm text-amber-600 mb-4">No other plans available to upgrade to.</p>
+                )}
                 <div className="flex gap-2">
                   <button
-                    onClick={() => upgrade(actionModal.id, document.getElementById('upgradePlan')?.value)}
+                    onClick={() => upgrade(actionModal.id, upgradePlanId)}
                     className="px-4 py-2 bg-slate-800 text-white rounded-lg"
+                    disabled={!upgradePlanId}
                   >
                     Upgrade
                   </button>
-                  <button onClick={() => setActionModal(null)} className="px-4 py-2 border rounded-lg">Cancel</button>
+                  <button onClick={() => { setActionModal(null); setActionError(''); }} className="px-4 py-2 border rounded-lg">Cancel</button>
                 </div>
               </>
             )}
@@ -371,21 +425,22 @@ export default function Memberships() {
               <>
                 <h3 className="font-semibold text-slate-800 mb-4">Top-up Balance</h3>
                 <input
-                  id="topupAmount"
                   type="number"
                   min="1"
                   step="0.01"
                   placeholder="Amount (₹)"
+                  value={topUpAmount}
+                  onChange={(e) => setTopUpAmount(e.target.value)}
                   className="w-full border rounded-lg px-3 py-2 mb-4"
                 />
                 <div className="flex gap-2">
                   <button
-                    onClick={() => topUp(actionModal.id, document.getElementById('topupAmount')?.value)}
+                    onClick={() => topUp(actionModal.id, topUpAmount)}
                     className="px-4 py-2 bg-slate-800 text-white rounded-lg"
                   >
                     Top-up
                   </button>
-                  <button onClick={() => setActionModal(null)} className="px-4 py-2 border rounded-lg">Cancel</button>
+                  <button onClick={() => { setActionModal(null); setActionError(''); }} className="px-4 py-2 border rounded-lg">Cancel</button>
                 </div>
               </>
             )}

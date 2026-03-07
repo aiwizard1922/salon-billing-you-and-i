@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { amountInWords } from '../utils/amountInWords';
 import { formatINR } from '../utils/formatCurrency';
+import { formatDateIST } from '../utils/ist';
 
 const API = '/api';
 const HSN_SAC = '998316'; // Beauty treatment services (Indian GST)
@@ -81,7 +82,7 @@ export default function InvoiceView() {
   const cgstAmount = Number(invoice.tax_amount) / 2;
   const sgstAmount = Number(invoice.tax_amount) / 2;
   const subtotal = Number(invoice.subtotal);
-  const total = Number(invoice.total);
+  const total = Math.round(Number(invoice.total));
   const membershipBalance = activeMembership
     ? (Number(activeMembership.remaining_balance) || Number(activeMembership.initial_balance)) ||
       ((activeMembership.usage_count ?? 0) === 0 ? (Number(activeMembership.plan_price) || Number(activeMembership.special_price) || 0) : 0)
@@ -163,11 +164,19 @@ export default function InvoiceView() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-6">
           <div>
-            <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Sold by</p>
-            <p className="font-bold text-slate-800">{shop?.name || 'Salon'}</p>
-            {shop?.address && <p className="text-sm text-slate-600">{shop.address}</p>}
-            {shop?.gstin && <p className="text-sm text-slate-600 mt-1">GSTIN: {shop.gstin}</p>}
-            {shop?.state && <p className="text-sm text-slate-600">State: {shop.state}</p>}
+            <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">From</p>
+            <p className="font-bold text-slate-800 text-sm">{shop?.name || 'Salon'}</p>
+            {shop?.address && <p className="text-xs text-slate-600 leading-tight">{shop.address}</p>}
+            {(shop?.phone || shop?.email) && (
+              <p className="text-xs text-slate-600 mt-0.5">
+                {[shop?.phone, shop?.email].filter(Boolean).join(' · ')}
+              </p>
+            )}
+            {(shop?.gstin || shop?.state) && (
+              <p className="text-xs text-slate-600 mt-0.5">
+                {[shop?.gstin && `GSTIN: ${shop.gstin}`, shop?.state].filter(Boolean).join(' · ')}
+              </p>
+            )}
           </div>
           <div className="text-right md:text-left">
             <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">Bill to</p>
@@ -184,7 +193,7 @@ export default function InvoiceView() {
           </div>
           <div>
             <span className="text-slate-500">Date:</span>
-            <span className="font-semibold ml-2">{invoice.invoice_date}</span>
+            <span className="font-semibold ml-2">{formatDateIST(invoice.invoice_date)}</span>
           </div>
         </div>
 
@@ -192,7 +201,7 @@ export default function InvoiceView() {
           <thead>
             <tr className="bg-slate-100 border-y border-slate-200">
               <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">HSN/SAC</th>
-              <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Description</th>
+              <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700 min-w-[160px]">Description (Service)</th>
               <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Qty</th>
               <th className="text-right py-3 px-4 text-sm font-semibold text-slate-700">Rate (₹)</th>
               <th className="text-right py-3 px-4 text-sm font-semibold text-slate-700">Amount (₹)</th>
@@ -202,7 +211,7 @@ export default function InvoiceView() {
             {(invoice.items || []).map((item, i) => (
               <tr key={i} className="border-b border-slate-100">
                 <td className="py-3 px-4 text-slate-600">{HSN_SAC}</td>
-                <td className="py-3 px-4">{item.service_name}</td>
+                <td className="py-3 px-4 font-medium text-slate-800">{item.description || item.service_name || item.serviceName || '—'}</td>
                 <td className="py-3 px-4 text-center">{item.quantity}</td>
                 <td className="py-3 px-4 text-right">{formatINR(item.unit_price)}</td>
                 <td className="py-3 px-4 text-right">{formatINR(item.total)}</td>
@@ -225,9 +234,15 @@ export default function InvoiceView() {
               <span className="text-slate-600">SGST @ {sgstRate}%</span>
               <span>{formatINR(sgstAmount)}</span>
             </div>
+            {(Number(invoice.discount_percent) || 0) > 0 && (
+              <div className="flex justify-between text-sm text-green-600">
+                <span>Discount ({Number(invoice.discount_percent)}%)</span>
+                <span>-{formatINR(Number(invoice.discount_amount) || 0)}</span>
+              </div>
+            )}
             <div className="flex justify-between font-bold text-lg mt-3 pt-3 border-t-2 border-slate-200">
               <span>Total</span>
-              <span>{formatINR(total)}</span>
+              <span>{formatINR(total, 0)}</span>
             </div>
           </div>
         </div>
@@ -239,7 +254,7 @@ export default function InvoiceView() {
 
         {invoice.status === 'paid' && (
           <div className="mt-6 p-3 bg-green-50 rounded-lg text-green-800 text-sm">
-            Paid on {invoice.paid_at ? new Date(invoice.paid_at).toLocaleDateString('en-IN') : '–'}
+            Paid on {formatDateIST(invoice.paid_at)}
             {invoice.payment_method && (
               <span>
                 {' '}

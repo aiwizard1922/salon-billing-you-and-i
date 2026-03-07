@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { formatINR } from '../utils/formatCurrency';
 import { Plus, Trash2, Edit2 } from 'lucide-react';
+import { istDateStr } from '../utils/ist';
 
 const API = '/api';
 
@@ -12,16 +13,16 @@ export default function Expenses() {
   const [fromDate, setFromDate] = useState(() => {
     const d = new Date();
     d.setDate(1);
-    return d.toISOString().slice(0, 10);
+    return istDateStr(d);
   });
-  const [toDate, setToDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [toDate, setToDate] = useState(() => istDateStr());
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({
     type: 'daily',
     category: '',
     amount: '',
-    expenseDate: new Date().toISOString().slice(0, 10),
+    expenseDate: istDateStr(),
     notes: '',
   });
 
@@ -57,7 +58,7 @@ export default function Expenses() {
       type: 'daily',
       category: '',
       amount: '',
-      expenseDate: new Date().toISOString().slice(0, 10),
+      expenseDate: istDateStr(),
       notes: '',
     });
     setEditing(null);
@@ -99,7 +100,7 @@ export default function Expenses() {
       type: exp.type,
       category: exp.category,
       amount: String(exp.amount),
-      expenseDate: exp.expense_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+      expenseDate: exp.expense_date?.slice(0, 10) || istDateStr(),
       notes: exp.notes || '',
     });
     setShowForm(true);

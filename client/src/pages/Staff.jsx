@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
-import { Plus, Users, Phone, Mail, Briefcase, Calendar, Clock, Target, UserCheck } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
+import { Plus, Users, Phone, Mail, Briefcase, Calendar, Clock, Target, UserCheck, ExternalLink } from 'lucide-react';
+import { istDateStr, istMonthStr, formatDateIST } from '../utils/ist';
 
 const API = '/api';
 
-const TABS = ['Staff', 'Shifts', 'Attendance', 'Goals'];
+const TABS = ['Staff', 'Work', 'Shifts', 'Attendance', 'Goals'];
 
 export default function Staff() {
   const [activeTab, setActiveTab] = useState('Staff');
@@ -11,9 +13,13 @@ export default function Staff() {
   const [shifts, setShifts] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [goals, setGoals] = useState([]);
+  const [workHistory, setWorkHistory] = useState([]);
+  const [workLoading, setWorkLoading] = useState(false);
+  const [workError, setWorkError] = useState('');
+  const [workFilters, setWorkFilters] = useState({ staffId: '', from: '', to: '' });
   const [shiftForm, setShiftForm] = useState({ staffId: '', shiftDate: '', startTime: '09:00', endTime: '18:00', breakMinutes: 0 });
   const [attendanceForm, setAttendanceForm] = useState({ staffId: '', attendanceDate: '', checkIn: '', checkOut: '', status: 'present' });
-  const [goalForm, setGoalForm] = useState({ staffId: '', periodValue: new Date().toISOString().slice(0, 7), targetAmount: 0, targetCount: 0 });
+  const [goalForm, setGoalForm] = useState({ staffId: '', periodValue: istMonthStr(), targetAmount: 0, targetCount: 0 });
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -32,7 +38,7 @@ export default function Staff() {
     const to = new Date(from);
     to.setMonth(to.getMonth() + 1);
     to.setDate(0);
-    fetch(`${API}/staff/shifts?from=${from.toISOString().slice(0, 10)}&to=${to.toISOString().slice(0, 10)}`)
+    fetch(`${API}/staff/shifts?from=${istDateStr(from)}&to=${istDateStr(to)}`)
       .then((r) => r.json())
       .then((d) => d.success && setShifts(d.data));
   };
@@ -40,7 +46,7 @@ export default function Staff() {
   const loadAttendance = () => {
     const from = new Date();
     from.setDate(from.getDate() - 7);
-    fetch(`${API}/staff/attendance?from=${from.toISOString().slice(0, 10)}`)
+    fetch(`${API}/staff/attendance?from=${istDateStr(from)}`)
       .then((r) => r.json())
       .then((d) => d.success && setAttendance(d.data));
   };
@@ -48,6 +54,23 @@ export default function Staff() {
   const loadGoals = () => {
     fetch(`${API}/staff/goals`).then((r) => r.json()).then((d) => d.success && setGoals(d.data));
   };
+
+  const loadWorkHistory = useCallback(() => {
+    setWorkLoading(true);
+    setWorkError('');
+    const params = new URLSearchParams();
+    if (workFilters.staffId) params.set('staffId', workFilters.staffId);
+    if (workFilters.from) params.set('from', workFilters.from);
+    if (workFilters.to) params.set('to', workFilters.to);
+    fetch(`${API}/staff/work-history?${params}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setWorkHistory(d.data || []);
+        else setWorkError(d.error || 'Failed to load work history');
+      })
+      .catch((err) => setWorkError(err.message || 'Request failed'))
+      .finally(() => setWorkLoading(false));
+  }, [workFilters.staffId, workFilters.from, workFilters.to]);
 
   useEffect(() => {
     setLoading(true);
@@ -58,7 +81,8 @@ export default function Staff() {
     if (activeTab === 'Shifts') loadShifts();
     if (activeTab === 'Attendance') loadAttendance();
     if (activeTab === 'Goals') loadGoals();
-  }, [activeTab]);
+    if (activeTab === 'Work') loadWorkHistory();
+  }, [activeTab, loadWorkHistory]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -148,7 +172,7 @@ export default function Staff() {
       body: JSON.stringify(attendanceForm),
     })
       .then((r) => r.json())
-      .then((d) => d.success && (setAttendanceForm({ staffId: '', attendanceDate: new Date().toISOString().slice(0, 10), checkIn: '', checkOut: '', status: 'present' }), loadAttendance()));
+      .then((d) => d.success && (setAttendanceForm({ staffId: '', attendanceDate: istDateStr(), checkIn: '', checkOut: '', status: 'present' }), loadAttendance()));
   };
 
   const addGoal = (e) => {
@@ -160,7 +184,7 @@ export default function Staff() {
       body: JSON.stringify({ ...goalForm, periodType: 'monthly' }),
     })
       .then((r) => r.json())
-      .then((d) => d.success && (setGoalForm({ staffId: '', periodValue: new Date().toISOString().slice(0, 7), targetAmount: 0, targetCount: 0 }), loadGoals()));
+      .then((d) => d.success && (setGoalForm({ staffId: '', periodValue: istMonthStr(), targetAmount: 0, targetCount: 0 }), loadGoals()));
   };
 
   return (
@@ -294,7 +318,7 @@ export default function Staff() {
         <>
           <form onSubmit={addAttendance} className="mb-6 p-4 bg-white rounded-xl border border-slate-200 flex flex-wrap gap-4">
             <div><label className="block text-xs text-slate-500">Staff</label><select value={attendanceForm.staffId} onChange={(e) => setAttendanceForm({ ...attendanceForm, staffId: e.target.value })} className="border rounded px-2 py-1" required><option value="">Select</option>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-            <div><label className="block text-xs text-slate-500">Date</label><input type="date" value={attendanceForm.attendanceDate || new Date().toISOString().slice(0, 10)} onChange={(e) => setAttendanceForm({ ...attendanceForm, attendanceDate: e.target.value })} className="border rounded px-2 py-1" required /></div>
+            <div><label className="block text-xs text-slate-500">Date</label><input type="date" value={attendanceForm.attendanceDate || istDateStr()} onChange={(e) => setAttendanceForm({ ...attendanceForm, attendanceDate: e.target.value })} className="border rounded px-2 py-1" required /></div>
             <div><label className="block text-xs text-slate-500">Check-in</label><input type="time" value={attendanceForm.checkIn} onChange={(e) => setAttendanceForm({ ...attendanceForm, checkIn: e.target.value })} className="border rounded px-2 py-1" /></div>
             <div><label className="block text-xs text-slate-500">Check-out</label><input type="time" value={attendanceForm.checkOut} onChange={(e) => setAttendanceForm({ ...attendanceForm, checkOut: e.target.value })} className="border rounded px-2 py-1" /></div>
             <div><label className="block text-xs text-slate-500">Status</label><select value={attendanceForm.status} onChange={(e) => setAttendanceForm({ ...attendanceForm, status: e.target.value })} className="border rounded px-2 py-1"><option value="present">Present</option><option value="absent">Absent</option><option value="leave">Leave</option><option value="half-day">Half-day</option></select></div>
@@ -327,6 +351,75 @@ export default function Staff() {
                 <span>₹{g.target_amount} / {g.target_count} services</span>
               </div>
             ))}
+          </div>
+        </>
+      )}
+
+      {activeTab === 'Work' && (
+        <>
+          <div className="mb-6 p-4 bg-white rounded-xl border border-slate-200 flex flex-wrap gap-4 items-end">
+            <div>
+              <label className="block text-xs text-slate-500">Staff</label>
+              <select
+                value={workFilters.staffId}
+                onChange={(e) => setWorkFilters({ ...workFilters, staffId: e.target.value })}
+                className="border rounded px-2 py-1"
+              >
+                <option value="">All staff</option>
+                {staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500">From</label>
+              <input type="date" value={workFilters.from} onChange={(e) => setWorkFilters({ ...workFilters, from: e.target.value })} className="border rounded px-2 py-1" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500">To</label>
+              <input type="date" value={workFilters.to} onChange={(e) => setWorkFilters({ ...workFilters, to: e.target.value })} className="border rounded px-2 py-1" />
+            </div>
+            <button type="button" onClick={loadWorkHistory} disabled={workLoading} className="px-4 py-2 bg-slate-800 text-white rounded-lg disabled:opacity-50">
+              {workLoading ? 'Loading...' : 'Apply'}
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 mb-2">Services performed by staff (assigned during billing). Not shown on invoices.</p>
+          {workError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{workError}</div>
+          )}
+          <div className="space-y-2">
+            {workLoading ? (
+              <div className="bg-white rounded-lg p-6 border text-center text-slate-500">Loading...</div>
+            ) : workHistory.length === 0 ? (
+              <div className="bg-white rounded-lg p-6 border text-center text-slate-500">
+                No work history yet. Assign staff to each service when creating invoices (Staff dropdown per row).
+                <br />
+                <span className="text-xs">Invoices created before staff-tracking was added won&apos;t have this data. Create a new invoice to test.</span>
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-100 border-b border-slate-200">
+                      <th className="text-left py-3 px-4 font-semibold text-slate-700">Staff</th>
+                      <th className="text-left py-3 px-4 font-semibold text-slate-700">Service</th>
+                      <th className="text-right py-3 px-4 font-semibold text-slate-700">Invoice</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {workHistory.map((w) => (
+                      <tr key={w.id} className="border-b border-slate-100 hover:bg-slate-50">
+                        <td className="py-3 px-4 font-medium text-slate-800">{w.staff_name}</td>
+                        <td className="py-3 px-4 text-slate-700">{w.service_name}{w.quantity > 1 ? ` ×${w.quantity}` : ''}</td>
+                        <td className="py-3 px-4 text-right">
+                          <Link to={`/invoices/${w.invoice_id}`} className="inline-flex items-center gap-1 text-amber-600 hover:text-amber-700 hover:underline font-medium">
+                            {w.invoice_number || `#${w.invoice_id}`} <ExternalLink size={12} />
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -369,7 +462,7 @@ export default function Staff() {
                     )}
                     {s.join_date && (
                       <p className="text-sm text-slate-500 flex items-center gap-1">
-                        <Calendar size={12} /> Joined {new Date(s.join_date).toLocaleDateString()}
+                        <Calendar size={12} /> Joined {formatDateIST(s.join_date)}
                       </p>
                     )}
                   </div>

@@ -55,7 +55,7 @@ function AppLayout() {
   const { user, logout } = useAuth();
   return (
     <div className="min-h-screen bg-slate-50 flex">
-      <aside className="w-56 bg-slate-800 text-white flex-shrink-0 flex flex-col">
+      <aside className="no-print w-56 bg-slate-800 text-white flex-shrink-0 flex flex-col">
         <div className="p-4 border-b border-slate-700">
           <span className="text-slate-400 text-xs font-medium uppercase tracking-wider">Quick Links</span>
         </div>
@@ -66,7 +66,7 @@ function AppLayout() {
         </nav>
       </aside>
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="bg-slate-800 text-white shadow flex-shrink-0">
+        <header className="no-print bg-slate-800 text-white shadow flex-shrink-0">
           <div className="px-6 py-4 flex items-center justify-between">
             <Link to="/" className="text-xl font-bold">Salon Billing</Link>
             <button

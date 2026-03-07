@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { formatINR } from '../utils/formatCurrency';
 import { Calendar, Clock } from 'lucide-react';
+import { istDateStr } from '../utils/ist';
 
 const API = '/api';
 
@@ -12,8 +13,8 @@ export default function Appointments() {
   const [form, setForm] = useState({ customerId: '', appointmentDate: '', appointmentTime: '', services: [], totalAmount: 0, notes: '' });
 
   const load = () => {
-    const from = new Date().toISOString().slice(0, 10);
-    const to = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const from = istDateStr();
+    const to = istDateStr(new Date(Date.now() + 30 * 86400000));
     fetch(`${API}/appointments?from=${from}&to=${to}`).then((r) => r.json()).then((d) => d.success && setAppointments(d.data));
   };
 

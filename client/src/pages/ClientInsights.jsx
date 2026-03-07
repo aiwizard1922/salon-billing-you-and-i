@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Users, UserPlus, RefreshCw, User, UserCheck } from 'lucide-react';
+import { istMonthStr, formatDateIST } from '../utils/ist';
 
 const API = '/api';
 
@@ -15,7 +16,7 @@ const COLORS = {
 
 export default function ClientInsights() {
   const [data, setData] = useState(null);
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(istMonthStr());
   const [loading, setLoading] = useState(true);
 
   const load = () => {
@@ -46,13 +47,17 @@ export default function ClientInsights() {
     totalVisited: 0,
     newClients: 0,
     returningClients: 0,
+    dailyStats: [],
     male: 0,
     female: 0,
     other: 0,
     unknownGender: 0,
+    invoiceDateRange: null,
   };
 
   const totalGender = d.male + d.female + d.other + d.unknown;
+  const dailyStats = d.dailyStats || [];
+  const range = d.invoiceDateRange;
 
   return (
     <div>
@@ -70,8 +75,35 @@ export default function ClientInsights() {
       </div>
 
       <p className="text-sm text-slate-500 mb-6">
-        Client visits are based on paid invoices. &quot;New&quot; = first visit ever was this month. &quot;Returning&quot; = visited before.
+        Based on <strong>invoices created</strong> only. &quot;New&quot; = first invoice ever for that customer. &quot;Returning&quot; = customer had an invoice before. Daily table shows counts per day; monthly totals are unique customers.
       </p>
+
+      {d.totalVisited === 0 && d.invoiceDateRange && (
+        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm flex flex-col gap-2">
+          <span>
+            No invoices for {formatMonth(d.month)}. Your {d.invoiceDateRange.totalInvoices} invoice(s) are from{' '}
+            {d.invoiceDateRange.min && d.invoiceDateRange.max
+              ? `${formatDateIST(d.invoiceDateRange.min, { month: 'short', year: 'numeric' })} to ${formatDateIST(d.invoiceDateRange.max, { month: 'short', year: 'numeric' })}`
+              : 'other months'}
+            .
+          </span>
+          {d.invoiceDateRange.min && (
+            <button
+              type="button"
+              onClick={() => setMonth(String(d.invoiceDateRange.min).slice(0, 7))}
+              className="self-start px-3 py-1.5 bg-amber-200 hover:bg-amber-300 rounded-lg text-sm font-medium"
+            >
+              View {formatDateIST(d.invoiceDateRange.min, { month: 'long', year: 'numeric' })}
+            </button>
+          )}
+        </div>
+      )}
+
+      {d.totalVisited === 0 && data && !data.invoiceDateRange && (
+        <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-sm">
+          No invoices in the database yet. Create invoices to see client insights.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div className="bg-white rounded-xl shadow p-6 border border-slate-200">

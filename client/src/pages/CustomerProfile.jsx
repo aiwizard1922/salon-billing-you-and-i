@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { User, FileText, Calendar, Tag, MessageSquare, Plus, DollarSign } from 'lucide-react';
 import { formatINR } from '../utils/formatCurrency';
+import { formatDateIST, formatDateTimeIST } from '../utils/ist';
 
 const API = '/api';
 
@@ -100,7 +101,7 @@ export default function CustomerProfile() {
             </div>
             <div className="text-center">
               <p className="text-xs text-slate-500">Last Visit</p>
-              <p className="font-bold text-slate-800">{lastVisit ? new Date(lastVisit).toLocaleDateString() : '-'}</p>
+              <p className="font-bold text-slate-800">{lastVisit ? formatDateIST(lastVisit) : '-'}</p>
             </div>
             <Link
               to={`/invoices/new?customer=${customer.id}`}
@@ -167,7 +168,7 @@ export default function CustomerProfile() {
                 {notes.map((n) => (
                   <div key={n.id} className="p-3 rounded-lg bg-slate-50 text-sm">
                     <p>{n.note}</p>
-                    <p className="text-xs text-slate-500 mt-1">{new Date(n.created_at).toLocaleString()}{n.staff_name && ` · ${n.staff_name}`}</p>
+                    <p className="text-xs text-slate-500 mt-1">{formatDateTimeIST(n.created_at)}{n.staff_name && ` · ${n.staff_name}`}</p>
                   </div>
                 ))}
               </div>

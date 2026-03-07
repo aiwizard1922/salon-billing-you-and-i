@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Scissors, Tag, Plus } from 'lucide-react';
 import { formatINR } from '../utils/formatCurrency';
+import { istDateStr } from '../utils/ist';
 
 const API = '/api';
 
@@ -88,7 +89,7 @@ export default function Catalog() {
   };
 
   const isPromoActive = (p) => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = istDateStr();
     return p.start_date <= today && p.end_date >= today && p.is_active !== false;
   };
 

@@ -5,6 +5,11 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
+// Use IST (India) for all date/timestamp operations
+pool.on('connect', (client) => {
+  client.query("SET timezone = 'Asia/Kolkata'");
+});
+
 async function testConnection() {
   try {
     await pool.query('SELECT 1');
@@ -56,11 +61,11 @@ async function getCustomerByPhone(phone) {
   return res.rows[0] || null;
 }
 
-async function findOrCreateCustomer({ name, phone }) {
+async function findOrCreateCustomer({ name, phone, gender, email, notes }) {
   if (!name?.trim() || !phone?.trim()) return null;
   const existing = await getCustomerByPhone(phone);
   if (existing) return existing;
-  return createCustomer({ name: name.trim(), phone: phone.trim() });
+  return createCustomer({ name: name.trim(), phone: phone.trim(), gender: gender || null, email: email || null, notes: notes || null });
 }
 
 async function updateCustomer(id, { name, phone, email, gender, notes }) {
@@ -118,8 +123,22 @@ async function getInvoiceById(id) {
   );
   const invoice = inv.rows[0];
   if (!invoice) return null;
-  const items = await pool.query('SELECT * FROM invoice_items WHERE invoice_id = $1', [id]);
-  invoice.items = items.rows;
+  let items;
+  try {
+    items = await pool.query(
+      `SELECT ii.*, p.name as product_name
+       FROM invoice_items ii
+       LEFT JOIN products p ON ii.product_id = p.id
+       WHERE ii.invoice_id = $1`,
+      [id]
+    );
+  } catch {
+    items = await pool.query('SELECT * FROM invoice_items WHERE invoice_id = $1', [id]);
+  }
+  invoice.items = items.rows.map((row) => ({
+    ...row,
+    description: row.service_name || row.product_name || '—',
+  }));
   return invoice;
 }
 
@@ -130,23 +149,27 @@ async function getNextInvoiceNumber() {
   return `INV-${String(num + 1).padStart(3, '0')}`;
 }
 
-async function createInvoice({ customerId, items, taxPercent = 5, appointmentId, notes, staffId }) {
+async function createInvoice({ customerId, items, taxPercent = 5, discountPercent = 0, appointmentId, notes, staffId }) {
   const invoiceNumber = await getNextInvoiceNumber();
   const subtotal = items.reduce((s, i) => s + Number(i.unit_price) * (i.quantity || 1), 0);
   const taxAmount = (subtotal * taxPercent) / 100;
-  const total = subtotal + taxAmount;
+  const totalBeforeDiscount = subtotal + taxAmount;
+  const discountPct = Math.max(0, Math.min(100, Number(discountPercent) || 0));
+  const discountAmount = (totalBeforeDiscount * discountPct) / 100;
+  const total = Math.round(Math.max(0, totalBeforeDiscount - discountAmount));
 
   const inv = await pool.query(
-    `INSERT INTO invoices (customer_id, invoice_number, subtotal, tax_percent, tax_amount, total, appointment_id, notes, staff_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [customerId, invoiceNumber, subtotal, taxPercent, taxAmount, total, appointmentId || null, notes || null, staffId || null]
+    `INSERT INTO invoices (customer_id, invoice_number, subtotal, tax_percent, tax_amount, discount_percent, discount_amount, total, appointment_id, notes, staff_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    [customerId, invoiceNumber, subtotal, taxPercent, taxAmount, discountPct, discountAmount, total, appointmentId || null, notes || null, staffId || null]
   );
 
   for (const item of items) {
     const qty = item.quantity || 1;
+    const itemStaffId = item.staff_id ? Number(item.staff_id) : null;
     await pool.query(
-      'INSERT INTO invoice_items (invoice_id, service_name, quantity, unit_price, total) VALUES ($1, $2, $3, $4, $5)',
-      [inv.rows[0].id, item.service_name, qty, item.unit_price, Number(item.unit_price) * qty]
+      'INSERT INTO invoice_items (invoice_id, service_name, quantity, unit_price, total, staff_id) VALUES ($1, $2, $3, $4, $5, $6)',
+      [inv.rows[0].id, item.service_name, qty, item.unit_price, Number(item.unit_price) * qty, itemStaffId]
     );
   }
   return getInvoiceById(inv.rows[0].id);
@@ -305,6 +328,27 @@ async function updateStaff(id, { name, phone, email, role, joinDate, notes, isAc
   return getStaffById(id);
 }
 
+async function getStaffWorkHistory(filters = {}) {
+  let query = `
+    SELECT ii.id, ii.invoice_id as invoice_id, i.id as invoice_id, ii.service_name, ii.quantity, ii.unit_price, ii.total, ii.staff_id,
+           s.name as staff_name, i.invoice_number, i.invoice_date, i.status,
+           c.name as customer_name
+    FROM invoice_items ii
+    JOIN invoices i ON ii.invoice_id = i.id
+    JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN staff s ON ii.staff_id = s.id
+    WHERE ii.staff_id IS NOT NULL
+  `;
+  const params = [];
+  let idx = 1;
+  if (filters.staffId) { query += ` AND ii.staff_id = $${idx}`; params.push(filters.staffId); idx++; }
+  if (filters.from) { query += ` AND i.invoice_date >= $${idx}`; params.push(filters.from); idx++; }
+  if (filters.to) { query += ` AND i.invoice_date <= $${idx}`; params.push(filters.to); idx++; }
+  query += ' ORDER BY i.invoice_date DESC, ii.id DESC';
+  const res = await pool.query(query, params);
+  return res.rows;
+}
+
 // --- Membership plans ---
 async function getMembershipPlans(activeOnly = true) {
   let query = 'SELECT * FROM membership_plans ORDER BY name';
@@ -341,7 +385,7 @@ async function updateMembershipPlan(id, { name, durationDays, price, benefits, i
 // --- Customer memberships ---
 async function getCustomerMemberships(customerId = null, status = null) {
   let query = `
-    SELECT cm.*, mp.name as plan_name, mp.duration_days, mp.price as plan_price, c.name as customer_name, c.phone as customer_phone
+    SELECT cm.*, mp.name as plan_name, mp.duration_days, mp.price as plan_price, mp.special_price, c.name as customer_name, c.phone as customer_phone
     FROM customer_memberships cm
     JOIN membership_plans mp ON cm.plan_id = mp.id
     JOIN customers c ON cm.customer_id = c.id
@@ -351,6 +395,7 @@ async function getCustomerMemberships(customerId = null, status = null) {
   let idx = 1;
   if (customerId) { query += ` AND cm.customer_id = $${idx}`; params.push(customerId); idx++; }
   if (status) { query += ` AND cm.status = $${idx}`; params.push(status); idx++; }
+  else { query += ` AND cm.status != 'upgraded'`; }
   query += ' ORDER BY cm.id DESC';
   const res = await pool.query(query, params);
   return res.rows;
@@ -435,63 +480,124 @@ async function getLatestMembershipForCustomer(customerId) {
 }
 
 // --- Client analytics (visits, new vs returning, gender breakdown) ---
+// Based on INVOICE DATE (invoice_date) - the business date on the invoice. Matches user expectation ("invoices in Feb").
+function getISTMonth() {
+  const f = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit' });
+  const parts = f.formatToParts(new Date());
+  const y = parts.find((p) => p.type === 'year').value;
+  const m = parts.find((p) => p.type === 'month').value;
+  return `${y}-${m}`;
+}
+
 async function getClientAnalytics(month = null) {
-  const targetMonth = month || new Date().toISOString().slice(0, 7); // YYYY-MM
+  const targetMonth = month || getISTMonth();
   const startDate = `${targetMonth}-01`;
   const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0)
     .toISOString()
     .slice(0, 10);
 
-  // Unique clients who had at least one PAID invoice this month
+  // Use invoice_date (business date). Include invoices where EITHER invoice_date OR created_at falls in month.
+  // Handles both: timestamps stored as UTC or as local (IST).
+  const invDateCol = 'invoice_date';
+  const createdIstDate = `(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date`;
+  const createdLocalDate = `(created_at AT TIME ZONE 'Asia/Kolkata')::date`;
+
+  // Unique customers with at least one invoice in this month (invoice_date OR created_at in range)
   const visitedRes = await pool.query(
     `SELECT DISTINCT customer_id FROM invoices
-     WHERE status = 'paid' AND paid_at::date >= $1 AND paid_at::date <= $2`,
+     WHERE (${invDateCol} >= $1 AND ${invDateCol} <= $2)
+        OR (${createdIstDate} >= $1 AND ${createdIstDate} <= $2)
+        OR (${createdLocalDate} >= $1 AND ${createdLocalDate} <= $2)`,
     [startDate, endDate]
   );
   const visitedIds = visitedRes.rows.map((r) => r.customer_id);
   const totalVisited = visitedIds.length;
 
   if (totalVisited === 0) {
+    // Help user find data: return date range and sample of invoice dates for debugging
+    const rangeRes = await pool.query(
+      `SELECT MIN(invoice_date) as min_date, MAX(invoice_date) as max_date, COUNT(*)::int as total FROM invoices`
+    );
+    const sampleRes = await pool.query(
+      `SELECT id, invoice_number, invoice_date, created_at,
+        (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date as created_ist,
+        (created_at AT TIME ZONE 'Asia/Kolkata')::date as created_local
+       FROM invoices ORDER BY id DESC LIMIT 5`
+    );
+    const r = rangeRes.rows[0];
     return {
       month: targetMonth,
       totalVisited: 0,
       newClients: 0,
       returningClients: 0,
+      dailyStats: [],
       male: 0,
       female: 0,
       other: 0,
       unknownGender: 0,
+      invoiceDateRange: r?.total > 0 ? { min: r.min_date, max: r.max_date, totalInvoices: r.total } : null,
+      _debug: { startDate, endDate, sampleInvoices: sampleRes.rows },
     };
   }
 
-  // New = first paid invoice ever was this month; Returning = had paid invoice before this month
-  const newClientsRes = await pool.query(
-    `WITH first_paid AS (
-       SELECT customer_id, MIN(DATE(paid_at)) as first_paid
-       FROM invoices WHERE status = 'paid' GROUP BY customer_id
+  // Daily breakdown: for each day, new count + returning count
+  const dailyRes = await pool.query(
+    `WITH first_inv AS (
+       SELECT customer_id, MIN(${invDateCol}) as first_date
+       FROM invoices GROUP BY customer_id
+     ),
+     daily_invoices AS (
+       SELECT customer_id, ${invDateCol} as inv_date
+       FROM invoices
+       WHERE ${invDateCol} >= $1 AND ${invDateCol} <= $2
      )
-     SELECT customer_id FROM first_paid
-     WHERE first_paid >= $1 AND first_paid <= $2 AND customer_id = ANY($3::int[])`,
+     SELECT d.inv_date as date,
+       COUNT(DISTINCT CASE WHEN f.first_date = d.inv_date THEN d.customer_id END)::int as new_count,
+       COUNT(DISTINCT CASE WHEN f.first_date < d.inv_date THEN d.customer_id END)::int as returning_count
+     FROM daily_invoices d
+     JOIN first_inv f ON f.customer_id = d.customer_id
+     GROUP BY d.inv_date
+     ORDER BY d.inv_date`,
+    [startDate, endDate]
+  );
+
+  const dailyStats = dailyRes.rows.map((r) => ({
+    date: r.date,
+    newCount: Number(r.new_count) || 0,
+    returningCount: Number(r.returning_count) || 0,
+    total: (Number(r.new_count) || 0) + (Number(r.returning_count) || 0),
+  }));
+
+  // New = first invoice ever was this month; Returning = had invoice before this month
+  const newClientsRes = await pool.query(
+    `WITH first_inv AS (
+       SELECT customer_id, MIN(${invDateCol}) as first_date
+       FROM invoices GROUP BY customer_id
+     )
+     SELECT customer_id FROM first_inv
+     WHERE first_date >= $1 AND first_date <= $2 AND customer_id = ANY($3::int[])`,
     [startDate, endDate, visitedIds]
   );
   const newCount = newClientsRes.rows.length;
   const returningCount = totalVisited - newCount;
 
-  // Gender breakdown for visited clients
-  const placeholders = visitedIds.map((_, i) => `$${i + 2}`).join(', ');
-  const genderRes = await pool.query(
-    `SELECT COALESCE(gender, 'unknown') as gender, COUNT(*)::int as cnt
-     FROM customers WHERE id IN (${placeholders})
-     GROUP BY COALESCE(gender, 'unknown')`,
-    visitedIds
-  );
-  const genderMap = { male: 0, female: 0, other: 0, unknown: 0 };
-  for (const row of genderRes.rows) {
-    const g = (row.gender || 'unknown').toLowerCase();
-    if (g === 'male') genderMap.male = row.cnt;
-    else if (g === 'female') genderMap.female = row.cnt;
-    else if (g === 'other') genderMap.other = row.cnt;
-    else genderMap.unknown += row.cnt;
+  // Gender: from customer profile (customers.gender). Set when creating/editing customers.
+  let genderMap = { male: 0, female: 0, other: 0, unknown: 0 };
+  if (visitedIds.length > 0) {
+    const placeholders = visitedIds.map((_, i) => `$${i + 1}`).join(', ');
+    const genderRes = await pool.query(
+      `SELECT COALESCE(LOWER(TRIM(gender)), 'unknown') as gender, COUNT(*)::int as cnt
+       FROM customers WHERE id IN (${placeholders})
+       GROUP BY COALESCE(LOWER(TRIM(gender)), 'unknown')`,
+      visitedIds
+    );
+    for (const row of genderRes.rows) {
+      const g = (row.gender || 'unknown').toLowerCase();
+      if (g === 'male') genderMap.male = row.cnt;
+      else if (g === 'female') genderMap.female = row.cnt;
+      else if (g === 'other') genderMap.other = row.cnt;
+      else genderMap.unknown += row.cnt;
+    }
   }
 
   return {
@@ -499,6 +605,7 @@ async function getClientAnalytics(month = null) {
     totalVisited,
     newClients: newCount,
     returningClients: returningCount,
+    dailyStats,
     male: genderMap.male,
     female: genderMap.female,
     other: genderMap.other,
@@ -526,6 +633,7 @@ module.exports = {
   getStaffById,
   createStaff,
   updateStaff,
+  getStaffWorkHistory,
   getMembershipPlans,
   getMembershipPlanById,
   createMembershipPlan,
