@@ -11,6 +11,8 @@ export default function Marketing() {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
   const [waConfigured, setWaConfigured] = useState(false);
+  const [waLogs, setWaLogs] = useState([]);
+  const [showLogs, setShowLogs] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -24,6 +26,12 @@ export default function Marketing() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  const fetchLogs = () => {
+    fetch(`${API}/whatsapp/logs`)
+      .then((r) => r.json())
+      .then((d) => d.success && setWaLogs(d.data));
+  };
 
   const withPhone = customers.filter((c) => c.phone?.trim());
   const selectAll = () => setSelectedIds(withPhone.map((c) => c.id));
@@ -88,6 +96,47 @@ export default function Marketing() {
           </div>
         </div>
       )}
+
+      <div className="mb-6">
+        <button
+          type="button"
+          onClick={() => { setShowLogs(!showLogs); if (!showLogs) fetchLogs(); }}
+          className="text-sm text-slate-600 hover:text-slate-800 underline"
+        >
+          {showLogs ? 'Hide' : 'Show'} recent WhatsApp delivery logs
+        </button>
+        {showLogs && (
+          <div className="mt-2 p-4 bg-slate-50 rounded-lg border text-sm max-h-48 overflow-y-auto">
+            {waLogs.length === 0 ? (
+              <p className="text-slate-500">No WhatsApp logs yet.</p>
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-slate-600">
+                    <th className="py-1 pr-4">To</th>
+                    <th className="py-1 pr-4">Type</th>
+                    <th className="py-1 pr-4">Status</th>
+                    <th className="py-1">Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {waLogs.map((l) => (
+                    <tr key={l.id} className="border-t border-slate-200">
+                      <td className="py-1.5 pr-4 font-mono text-xs">{l.to_phone}</td>
+                      <td className="py-1.5 pr-4">{l.message_type}</td>
+                      <td className="py-1.5 pr-4">
+                        <span className={l.status === 'sent' ? 'text-green-600' : 'text-amber-600'}>{l.status}</span>
+                      </td>
+                      <td className="py-1.5 text-slate-500 text-xs">{l.error_message || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <button type="button" onClick={fetchLogs} className="mt-2 text-xs text-amber-600 hover:underline">Refresh</button>
+          </div>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="bg-white rounded-xl shadow border p-6">

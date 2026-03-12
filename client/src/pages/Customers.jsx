@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Users, Phone, Pencil, User } from 'lucide-react';
+import { Plus, Users, Phone, Pencil, User, Search } from 'lucide-react';
 
 const API = '/api';
 
@@ -10,6 +10,7 @@ export default function Customers() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', gender: '', notes: '' });
+  const [search, setSearch] = useState('');
 
   const load = () => {
     fetch(`${API}/customers`)
@@ -19,6 +20,21 @@ export default function Customers() {
   };
 
   useEffect(() => { setLoading(true); load(); }, []);
+
+  const searchLower = String(search || '').trim().toLowerCase();
+  const searchDigits = searchLower.replace(/\D/g, '');
+  const filteredCustomers = !searchLower
+    ? customers
+    : customers.filter((c) => {
+        const name = String(c.name || c.customer_name || '').toLowerCase();
+        const phone = String(c.phone || '').replace(/\D/g, '');
+        const email = String(c.email || '').toLowerCase();
+        return (
+          name.includes(searchLower) ||
+          (searchDigits.length > 0 && phone.includes(searchDigits)) ||
+          email.includes(searchLower)
+        );
+      });
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -119,6 +135,18 @@ export default function Customers() {
           </div>
         </form>
       )}
+      {!loading && customers.length > 0 && (
+        <div className="relative mb-4 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          <input
+            type="search"
+            placeholder="Search by name, phone, or email..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-slate-300 focus:border-slate-400 bg-white"
+          />
+        </div>
+      )}
       {loading ? (
         <p className="text-slate-500">Loading...</p>
       ) : customers.length === 0 ? (
@@ -126,9 +154,15 @@ export default function Customers() {
           <Users className="w-16 h-16 text-slate-300 mx-auto mb-4" />
           <p className="text-slate-500">No customers yet.</p>
         </div>
+      ) : filteredCustomers.length === 0 ? (
+        <div className="bg-white rounded-xl p-12 text-center">
+          <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+          <p className="text-slate-500">No customers match &quot;{search}&quot;.</p>
+          <button onClick={() => setSearch('')} className="mt-2 text-amber-600 hover:underline text-sm">Clear search</button>
+        </div>
       ) : (
         <div className="space-y-2">
-          {customers.map((c) => (
+          {filteredCustomers.map((c) => (
             <div key={c.id} className="bg-white rounded-xl p-4 shadow flex justify-between items-center">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">

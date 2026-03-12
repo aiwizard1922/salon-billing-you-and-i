@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { formatINR } from '../utils/formatCurrency';
-import { Gift, Plus, Users, ArrowUpCircle, Wallet } from 'lucide-react';
+import { Gift, Plus, Users, ArrowUpCircle, Wallet, Search } from 'lucide-react';
 import { istDateStr } from '../utils/ist';
 
 const API = '/api';
@@ -19,6 +19,7 @@ export default function Memberships() {
   const [actionError, setActionError] = useState('');
   const [upgradePlanId, setUpgradePlanId] = useState('');
   const [topUpAmount, setTopUpAmount] = useState('');
+  const [search, setSearch] = useState('');
 
   const load = () => {
     Promise.all([
@@ -145,6 +146,23 @@ export default function Memberships() {
   // Same effective balance for display and status - Active when balance > 0, Expired when 0
   const effectiveBalance = (a) => Number(a.remaining_balance ?? a.initial_balance ?? a.plan_price ?? 0);
   const isActive = (a) => effectiveBalance(a) > 0;
+
+  const searchLower = String(search || '').trim().toLowerCase();
+  const searchDigits = searchLower.replace(/\D/g, '');
+  const filteredAssignments = !searchLower
+    ? assignments
+    : assignments.filter((a) => {
+        const name = String(a.customer_name || '').toLowerCase();
+        const phone = String(a.customer_phone || '').replace(/\D/g, '');
+        const plan = String(a.plan_name || '').toLowerCase();
+        const memId = `MEM-${a.id}`.toLowerCase();
+        return (
+          name.includes(searchLower) ||
+          (searchDigits.length > 0 && phone.includes(searchDigits)) ||
+          plan.includes(searchLower) ||
+          memId.includes(searchLower)
+        );
+      });
 
   if (loading) return <div className="text-slate-600">Loading...</div>;
 
@@ -305,16 +323,40 @@ export default function Memberships() {
 
       {/* Active memberships list */}
       <div>
-        <h3 className="font-semibold text-slate-800 mb-4">Customer Memberships</h3>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+          <h3 className="font-semibold text-slate-800">Customer Memberships</h3>
+          {assignments.length > 0 && (
+            <div className="relative max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="search"
+                placeholder="Search by customer, phone, or plan..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-slate-300 focus:border-slate-400"
+              />
+            </div>
+          )}
+        </div>
         {assignments.length === 0 ? (
           <div className="bg-white rounded-xl p-12 text-center border border-slate-200">
             <Users className="w-16 h-16 text-slate-300 mx-auto mb-4" />
             <p className="text-slate-500">No membership assignments yet.</p>
           </div>
+        ) : filteredAssignments.length === 0 ? (
+          <div className="bg-white rounded-xl p-12 text-center border border-slate-200">
+            <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+            <p className="text-slate-500">No memberships match &quot;{search}&quot;.</p>
+            <button onClick={() => setSearch('')} className="mt-2 text-amber-600 hover:underline text-sm">Clear search</button>
+          </div>
         ) : (
           <div className="bg-white rounded-xl overflow-hidden border border-slate-200">
             <div className="px-4 py-2 bg-slate-50 border-b text-sm text-slate-600">
-              Total: <strong>{assignments.length}</strong> membership(s)
+              {searchLower ? (
+                <>Showing <strong>{filteredAssignments.length}</strong> of {assignments.length} membership(s)</>
+              ) : (
+                <>Total: <strong>{assignments.length}</strong> membership(s)</>
+              )}
             </div>
             <table className="w-full text-sm">
               <thead className="bg-slate-50">
@@ -330,7 +372,7 @@ export default function Memberships() {
                 </tr>
               </thead>
               <tbody>
-                {assignments.map((a, i) => (
+                {filteredAssignments.map((a, i) => (
                   <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50">
                     <td className="py-3 px-4 text-center text-slate-600">{i + 1}</td>
                     <td className="py-3 px-4 font-mono text-sm font-medium">{a.customer_phone || `MEM-${a.id}`}</td>

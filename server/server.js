@@ -240,7 +240,7 @@ app.get('/api/invoices/:id', async (req, res) => {
 
 app.post('/api/invoices', async (req, res) => {
   try {
-    const { customerId, customer, items, taxPercent, discountPercent, appointmentId, notes, staffId } = req.body;
+    const { customerId, customer, items, taxPercent, discountPercent, appointmentId, notes, staffId, sendWhatsApp } = req.body;
     const hasItems = Array.isArray(items) && items.length > 0 && items.some((i) => i?.service_name?.trim());
     if (!hasItems) {
       return res.status(400).json({ success: false, error: 'Add at least one service with a name (e.g. Hair Cut, Facial)' });
@@ -263,7 +263,35 @@ app.post('/api/invoices', async (req, res) => {
       notes,
       staffId: staffId ? Number(staffId) : null,
     });
-    res.status(201).json({ success: true, data });
+    let whatsappSent = null;
+    let whatsappError = null;
+    if (data.customer_phone && whatsapp.isConfigured() && sendWhatsApp !== false) {
+      try {
+        const r = await whatsapp.sendInvoiceBill({
+          customerPhone: data.customer_phone,
+          customerName: data.customer_name,
+          invoiceNumber: data.invoice_number,
+          items: data.items || [],
+          total: data.total,
+          businessName: process.env.BUSINESS_NAME,
+        });
+        whatsappSent = r.ok;
+        whatsappError = r.error || null;
+        await db.logWhatsApp(data.customer_phone, 'invoice_bill', r.ok ? 'sent' : 'failed', r.error);
+        if (!r.ok) console.log('[WhatsApp] Invoice bill failed:', r.error, '| to:', data.customer_phone);
+        else console.log('[WhatsApp] Invoice bill sent to', data.customer_phone);
+      } catch (err) {
+        whatsappSent = false;
+        whatsappError = err.message;
+        await db.logWhatsApp(data.customer_phone, 'invoice_bill', 'failed', err.message);
+        console.log('[WhatsApp] Invoice bill error:', err.message);
+      }
+    } else if (!data.customer_phone) {
+      console.log('[WhatsApp] Skipped: customer has no phone number');
+    } else if (!whatsapp.isConfigured()) {
+      console.log('[WhatsApp] Skipped: WA_PHONE_NUMBER_ID or WA_ACCESS_TOKEN not set');
+    }
+    res.status(201).json({ success: true, data: { ...data, whatsappSent, whatsappError } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -994,6 +1022,16 @@ app.get('/api/analytics/clients/debug', async (req, res) => {
 
 app.get('/api/whatsapp/status', (req, res) => {
   res.json({ configured: whatsapp.isConfigured() });
+});
+
+app.get('/api/whatsapp/logs', async (req, res) => {
+  try {
+    const limit = Math.min(50, parseInt(req.query.limit, 10) || 20);
+    const logs = await db.getWhatsAppLogs(limit);
+    res.json({ success: true, data: logs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 app.post('/api/marketing/send', async (req, res) => {

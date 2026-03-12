@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Plus } from 'lucide-react';
+import { Search, Plus } from 'lucide-react';
 import { formatINR } from '../utils/formatCurrency';
 
 const API = '/api';
@@ -10,6 +10,7 @@ export default function Invoices() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all'); // all | pending | paid | membership
+  const [search, setSearch] = useState('');
 
   const load = () => {
     setLoading(true);
@@ -30,8 +31,16 @@ export default function Invoices() {
   const membershipInvoices = invoices.filter(
     (i) => (i.payment_method || '').toLowerCase().startsWith('membership') || Number(i.amount_from_membership || 0) > 0
   );
-  const displayList =
+  const filteredByStatus =
     filter === 'all' ? invoices : filter === 'pending' ? pending : filter === 'paid' ? paid : membershipInvoices;
+  const searchLower = (search || '').trim().toLowerCase();
+  const displayList = searchLower
+    ? filteredByStatus.filter(
+        (inv) =>
+          (inv.invoice_number || '').toLowerCase().includes(searchLower) ||
+          (inv.customer_name || '').toLowerCase().includes(searchLower)
+      )
+    : filteredByStatus;
 
   if (loading && invoices.length === 0) return <div className="text-slate-600">Loading...</div>;
   return (
@@ -45,13 +54,14 @@ export default function Invoices() {
       {error && (
         <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800">{error}</div>
       )}
-      <div className="flex gap-2 mb-4 flex-wrap">
-        {[
-          { key: 'all', label: 'All' },
-          { key: 'pending', label: 'Pending' },
-          { key: 'paid', label: 'Paid' },
-          { key: 'membership', label: 'Membership' },
-        ].map(({ key, label }) => (
+      <div className="flex flex-col sm:flex-row gap-4 mb-4">
+        <div className="flex gap-2 flex-wrap">
+          {[
+            { key: 'all', label: 'All' },
+            { key: 'pending', label: 'Pending' },
+            { key: 'paid', label: 'Paid' },
+            { key: 'membership', label: 'Membership' },
+          ].map(({ key, label }) => (
           <button
             key={key}
             onClick={() => setFilter(key)}
@@ -59,7 +69,18 @@ export default function Invoices() {
           >
             {label}
           </button>
-        ))}
+          ))}
+        </div>
+        <div className="relative flex-1 min-w-0 sm:max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            type="search"
+            placeholder="Search by invoice no. or customer..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-slate-300 focus:border-slate-400"
+          />
+        </div>
       </div>
       <div className="bg-white rounded-xl shadow overflow-hidden">
         {displayList.length === 0 ? (

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "backup": "node ../scripts/backup-db.js",
     "migrate:010": "node run-migration-010.js",
     "migrate:011": "node run-migration-011.js",
     "migrate:012": "node run-migration-012.js",

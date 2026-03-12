@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { amountInWords } from '../utils/amountInWords';
 import { formatINR } from '../utils/formatCurrency';
 import { formatDateIST } from '../utils/ist';
@@ -10,6 +10,8 @@ const HSN_SAC = '998316'; // Beauty treatment services (Indian GST)
 export default function InvoiceView() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const whatsappFromCreate = location.state?.whatsappSent !== undefined ? location.state : null;
   const [invoice, setInvoice] = useState(null);
   const [shop, setShop] = useState(null);
   const [activeMembership, setActiveMembership] = useState(null);
@@ -96,6 +98,17 @@ export default function InvoiceView() {
 
   return (
     <div>
+      {whatsappFromCreate && (
+        <div className={`mb-4 p-4 rounded-lg no-print ${whatsappFromCreate.whatsappSent ? 'bg-green-50 border border-green-200 text-green-800' : 'bg-amber-50 border border-amber-200 text-amber-800'}`}>
+          {whatsappFromCreate.whatsappSent ? (
+            <p className="text-sm">Bill sent to customer via WhatsApp.</p>
+          ) : (
+            <p className="text-sm">
+              WhatsApp not sent. {whatsappFromCreate.whatsappError || 'Customer may have no phone, or WhatsApp is not configured.'}
+            </p>
+          )}
+        </div>
+      )}
       <div className="mb-6 flex gap-2 no-print">
         <button onClick={() => navigate('/invoices')} className="px-4 py-2 border rounded-lg hover:bg-slate-100">← Back to Invoices</button>
         <button onClick={() => window.print()} className="px-4 py-2 bg-slate-800 text-white rounded-lg">Print</button>

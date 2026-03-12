@@ -5,6 +5,7 @@ dist/
 .DS_Store
 *.log
 *.tgz
+backups/
 
 # Unrelated projects (do not add to salon-billing)
 fs-for-f/

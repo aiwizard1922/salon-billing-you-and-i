@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Search } from 'lucide-react';
 import { formatINR } from '../utils/formatCurrency';
 
 const API = '/api';
@@ -25,6 +25,10 @@ export default function NewInvoice() {
   const [error, setError] = useState('');
   const [activeMembership, setActiveMembership] = useState(null);
   const [activeMembershipWithBalance, setActiveMembershipWithBalance] = useState(null);
+  const [sendWhatsApp, setSendWhatsApp] = useState(true);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const customerDropdownRef = useRef(null);
 
   useEffect(() => {
     fetch(`${API}/customers`).then((r) => r.json()).then((d) => d.success && setCustomers(d.data));
@@ -36,8 +40,20 @@ export default function NewInvoice() {
     if (preset) {
       setCustomerMode('existing');
       setCustomerId(preset);
+      const c = customers.find((x) => String(x.id) === preset);
+      if (c) setCustomerSearch(`${c.name} – ${c.phone}`);
     }
-  }, [preset]);
+  }, [preset, customers]);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target)) {
+        setShowCustomerDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     if (customerMode === 'existing' && customerId) {
@@ -101,6 +117,16 @@ export default function NewInvoice() {
     : 0;
   const canPayFromMembership = customerMode === 'existing' && activeMembershipWithBalance && membershipBalance >= total;
 
+  const customerSearchLower = String(customerSearch || '').trim().toLowerCase();
+  const customerSearchDigits = customerSearchLower.replace(/\D/g, '');
+  const filteredCustomersForSelect = !customerSearchLower
+    ? customers
+    : customers.filter((c) => {
+        const name = String(c.name || '').toLowerCase();
+        const phone = String(c.phone || '').replace(/\D/g, '');
+        return name.includes(customerSearchLower) || (customerSearchDigits.length > 0 && phone.includes(customerSearchDigits));
+      });
+
   const canSubmit = () => {
     const hasItems = items.some((i) => i.service_name?.trim());
     const allServicesHaveStaff = items
@@ -125,6 +151,7 @@ export default function NewInvoice() {
       taxPercent,
       discountPercent: discountPct,
       notes: notes || undefined,
+      sendWhatsApp,
     };
     if (customerMode === 'existing') {
       payload.customerId = Number(customerId);
@@ -148,6 +175,10 @@ export default function NewInvoice() {
           return;
         }
         const invoiceId = d.data.id;
+        const whatsappState = {
+          whatsappSent: d.data.whatsappSent,
+          whatsappError: d.data.whatsappError,
+        };
         if (payFromMembership && activeMembershipWithBalance && membershipBalance >= Number(d.data.total)) {
           return fetch(`${API}/invoices/${invoiceId}/pay`, {
             method: 'POST',
@@ -157,18 +188,18 @@ export default function NewInvoice() {
             .then((r2) => r2.json())
             .then((d2) => {
               if (d2.success) {
-                navigate(`/invoices/${invoiceId}`);
+                navigate(`/invoices/${invoiceId}`, { state: whatsappState });
               } else {
                 setError(d2.error || 'Invoice created but payment failed. You can pay from the invoice view.');
-                setTimeout(() => navigate(`/invoices/${invoiceId}`), 2000);
+                setTimeout(() => navigate(`/invoices/${invoiceId}`, { state: whatsappState }), 2000);
               }
             })
             .catch(() => {
               setError('Invoice created. Go to the invoice to mark as paid from membership.');
-              setTimeout(() => navigate(`/invoices/${invoiceId}`), 2000);
+              setTimeout(() => navigate(`/invoices/${invoiceId}`, { state: whatsappState }), 2000);
             });
         }
-        navigate(`/invoices/${invoiceId}`);
+        navigate(`/invoices/${invoiceId}`, { state: whatsappState });
       })
       .catch((err) => setError(err.message || 'Request failed'))
       .finally(() => setLoading(false));
@@ -200,7 +231,13 @@ export default function NewInvoice() {
                 type="radio"
                 name="customerMode"
                 checked={customerMode === 'existing'}
-                onChange={() => { setCustomerMode('existing'); setLookupFound(null); }}
+                onChange={() => {
+                  setCustomerMode('existing');
+                  setLookupFound(null);
+                  setCustomerSearch('');
+                  setCustomerId(preset || '');
+                  setShowCustomerDropdown(false);
+                }}
               />
               <span>Select existing</span>
             </label>
@@ -215,16 +252,55 @@ export default function NewInvoice() {
             </div>
           )}
           {customerMode === 'existing' ? (
-            <select
-              value={customerId}
-              onChange={(e) => setCustomerId(e.target.value)}
-              className="w-full border rounded-lg px-3 py-2"
-            >
-              <option value="">Select customer</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.name} – {c.phone}</option>
-              ))}
-            </select>
+            <div className="relative" ref={customerDropdownRef}>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search customer by name or phone..."
+                  value={customerSearch}
+                  onChange={(e) => {
+                    setCustomerSearch(e.target.value);
+                    setCustomerId('');
+                    setShowCustomerDropdown(true);
+                  }}
+                  onFocus={() => setShowCustomerDropdown(true)}
+                  className="w-full pl-9 pr-8 border rounded-lg px-3 py-2"
+                />
+                {customerId && (
+                  <button
+                    type="button"
+                    onClick={() => { setCustomerId(''); setCustomerSearch(''); setShowCustomerDropdown(false); }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    title="Clear selection"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+              {showCustomerDropdown && (
+                <div className="absolute z-10 w-full mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg">
+                  {filteredCustomersForSelect.length === 0 ? (
+                    <div className="px-3 py-4 text-sm text-slate-500">No customers match</div>
+                  ) : (
+                    filteredCustomersForSelect.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setCustomerId(String(c.id));
+                          setCustomerSearch(`${c.name} – ${c.phone}`);
+                          setShowCustomerDropdown(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${String(customerId) === String(c.id) ? 'bg-amber-50 text-amber-800' : ''}`}
+                      >
+                        {c.name} – {c.phone}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
           ) : (
             <div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -311,6 +387,18 @@ export default function NewInvoice() {
         <div className="mb-6">
           <label className="block text-sm text-slate-700 mb-1">Notes</label>
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border rounded px-3 py-2" rows={2} />
+        </div>
+        <div className="mb-6">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={sendWhatsApp}
+              onChange={(e) => setSendWhatsApp(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            <span className="text-sm text-slate-700">Send bill to customer via WhatsApp</span>
+          </label>
+          <p className="text-xs text-slate-500 mt-1">Requires customer phone. Uses your business WhatsApp number.</p>
         </div>
         <div className="border-t pt-4 mb-6">
           <div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{formatINR(rawSubtotal)}</span></div>

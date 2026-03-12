@@ -126,12 +126,16 @@ You'll see the **login page**. Sign in with:
 
 ## WhatsApp Setup
 
+See **[docs/WHATSAPP_SETUP.md](docs/WHATSAPP_SETUP.md)** for a detailed step-by-step guide.
+
+**Quick version:**
 1. Go to [Meta for Developers](https://developers.facebook.com/)
-2. Create an app → Add **WhatsApp** product
-3. Get **Phone Number ID** and **Access Token**
+2. Create an app (Other → Business) → Add **WhatsApp** product
+3. In WhatsApp → API Setup, copy **Phone number ID** and **Access token**
 4. Add to `server/.env`:
    - `WA_PHONE_NUMBER_ID`
    - `WA_ACCESS_TOKEN`
+5. Restart the server
 
 The app runs without WhatsApp – messages are logged but not sent until configured.
 

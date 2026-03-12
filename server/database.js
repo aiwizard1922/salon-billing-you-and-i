@@ -298,6 +298,14 @@ async function logWhatsApp(toPhone, messageType, status, errorMessage) {
   );
 }
 
+async function getWhatsAppLogs(limit = 20) {
+  const res = await pool.query(
+    'SELECT * FROM whatsapp_logs ORDER BY created_at DESC LIMIT $1',
+    [limit]
+  );
+  return res.rows;
+}
+
 // --- Staff ---
 async function getStaff(activeOnly = true) {
   let query = 'SELECT * FROM staff ORDER BY name';
@@ -653,4 +661,5 @@ module.exports = {
   createInvoice,
   markInvoicePaid,
   logWhatsApp,
+  getWhatsAppLogs,
 };
