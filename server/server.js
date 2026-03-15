@@ -126,20 +126,31 @@ app.get('/api/shop', (req, res) => {
   });
 });
 
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Salon Billing API',
-    endpoints: {
-      customers: 'GET/POST /api/customers',
-      appointments: 'GET/POST /api/appointments',
-      invoices: 'GET/POST /api/invoices',
-      'invoices/:id/pay': 'POST /api/invoices/:id/pay',
-      services: 'GET /api/services',
-      whatsapp: 'GET /api/whatsapp/status',
-      marketing: 'POST /api/marketing/send',
-    },
+// Resolve client build path (works for both local and Render)
+const fs = require('fs');
+const clientDistCandidates = [
+  path.join(process.cwd(), 'client', 'dist'), // when started from repo root (Render)
+  path.join(__dirname, '..', 'client', 'dist'),
+  path.join(process.cwd(), '..', 'client', 'dist'),
+];
+const clientDist = clientDistCandidates.find((p) => fs.existsSync(p));
+
+if (!clientDist) {
+  app.get('/', (req, res) => {
+    res.json({
+      message: 'Salon Billing API',
+      endpoints: {
+        customers: 'GET/POST /api/customers',
+        appointments: 'GET/POST /api/appointments',
+        invoices: 'GET/POST /api/invoices',
+        'invoices/:id/pay': 'POST /api/invoices/:id/pay',
+        services: 'GET /api/services',
+        whatsapp: 'GET /api/whatsapp/status',
+        marketing: 'POST /api/marketing/send',
+      },
+    });
   });
-});
+}
 
 app.get('/api/customers', async (req, res) => {
   try {
@@ -1158,8 +1169,14 @@ app.delete('/api/expenses/:id', async (req, res) => {
 });
 
 // Production: serve React build and SPA fallback
-const clientDist = path.join(__dirname, '../client/dist');
-if (require('fs').existsSync(clientDist)) {
+const fs = require('fs');
+const clientDistCandidates = [
+  path.join(__dirname, '../client/dist'),
+  path.join(process.cwd(), '../client/dist'),
+  path.join(process.cwd(), 'client/dist'),
+];
+const clientDist = clientDistCandidates.find((p) => fs.existsSync(p));
+if (clientDist) {
   app.use(express.static(clientDist));
   app.get('*', (req, res) => {
     if (req.path.startsWith('/api')) {
