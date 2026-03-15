@@ -9,7 +9,8 @@
     "dev:client": "cd client && npm run dev",
     "dev:server": "cd server && npm run dev",
     "build": "cd client && npm run build",
-    "start": "node server/server.js",
-    "postinstall": "cd client && NODE_ENV=development npm install && cd ../server && npm install"
+    "start": "node server/run-all-migrations.js && node server/server.js",
+    "postinstall": "cd client && NODE_ENV=development npm install && cd ../server && npm install",
+    "migrate": "cd server && node run-all-migrations.js"
   }
 }

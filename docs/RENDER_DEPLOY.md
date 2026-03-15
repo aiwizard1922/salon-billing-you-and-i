@@ -76,11 +76,25 @@ In **Environment** → **Environment Variables**, add:
 - First deploy can take 3–5 minutes
 - After success, you’ll see a URL like `https://salon-billing-xxxx.onrender.com`
 
-Test it: open the URL and log in (default: `admin` / `admin123` – change in production).
+---
+
+## Step 5: Run Database Migrations (required)
+
+The database starts empty. You must run migrations to create tables.
+
+1. In your Render Web Service → click **Shell** (top right)
+2. Run:
+   ```bash
+   cd server && node run-all-migrations.js
+   ```
+3. You should see `✓` for each migration and "All migrations applied successfully."
+4. If you see any error, check that `DATABASE_URL` is set correctly
+
+Then refresh the app – you should see the login page. Default login: `admin` / `admin123`.
 
 ---
 
-## Step 5: Add Custom Domain (billing.uandisalon.in)
+## Step 6: Add Custom Domain (billing.uandisalon.in)
 
 1. In your Render Web Service → **Settings** → **Custom Domains**
 2. Click **Add Custom Domain**
