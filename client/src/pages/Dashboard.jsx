@@ -10,13 +10,27 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true);
+    setError(null);
     fetch(`${API}/invoices`)
-      .then((r) => r.json())
-      .then((d) => (d.success ? setInvoices(d.data) : setError(d.error)))
-      .catch((e) => setError(e.message))
+      .then((r) => {
+        if (!r.ok) throw new Error(`Request failed: ${r.status}`);
+        return r.json();
+      })
+      .then((d) => {
+        if (d.success) {
+          setInvoices(d.data || []);
+          setError(null);
+        } else {
+          setError(d.error || 'Request failed');
+        }
+      })
+      .catch((e) => setError(e.message || 'Network error – try again'))
       .finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { load(); }, []);
 
   const pending = invoices.filter((i) => i.status === 'pending');
   const paid = invoices.filter((i) => i.status === 'paid');
@@ -28,8 +42,11 @@ export default function Dashboard() {
     <div>
       <h2 className="text-2xl font-bold text-slate-800 mb-6">Dashboard</h2>
       {error && (
-        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800">
-          {error}. Ensure PostgreSQL is running and DATABASE_URL is set.
+        <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 flex items-center justify-between gap-4">
+          <span>{error}</span>
+          <button onClick={load} className="px-3 py-1.5 bg-amber-200 hover:bg-amber-300 rounded text-sm font-medium">
+            Retry
+          </button>
         </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">

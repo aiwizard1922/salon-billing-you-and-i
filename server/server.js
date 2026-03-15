@@ -173,14 +173,6 @@ if (!clientDist) {
       },
     });
   });
-} else {
-  app.use(express.static(clientDist));
-  app.get('*', (req, res) => {
-    if (req.path.startsWith('/api')) {
-      return res.status(404).json({ success: false, error: 'Not found' });
-    }
-    res.sendFile(path.join(clientDist, 'index.html'));
-  });
 }
 
 app.get('/api/customers', async (req, res) => {
@@ -1198,6 +1190,17 @@ app.delete('/api/expenses/:id', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// Serve React app + SPA fallback (must be last, after all API routes)
+if (clientDist) {
+  app.use(express.static(clientDist));
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ success: false, error: 'Not found' });
+    }
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Salon Billing API at http://localhost:${PORT}`);
