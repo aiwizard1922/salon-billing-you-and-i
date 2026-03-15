@@ -150,6 +150,14 @@ if (!clientDist) {
       },
     });
   });
+} else {
+  app.use(express.static(clientDist));
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ success: false, error: 'Not found' });
+    }
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
 }
 
 app.get('/api/customers', async (req, res) => {
@@ -1167,24 +1175,6 @@ app.delete('/api/expenses/:id', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-
-// Production: serve React build and SPA fallback
-const fs = require('fs');
-const clientDistCandidates = [
-  path.join(__dirname, '../client/dist'),
-  path.join(process.cwd(), '../client/dist'),
-  path.join(process.cwd(), 'client/dist'),
-];
-const clientDist = clientDistCandidates.find((p) => fs.existsSync(p));
-if (clientDist) {
-  app.use(express.static(clientDist));
-  app.get('*', (req, res) => {
-    if (req.path.startsWith('/api')) {
-      return res.status(404).json({ success: false, error: 'Not found' });
-    }
-    res.sendFile(path.join(clientDist, 'index.html'));
-  });
-}
 
 app.listen(PORT, () => {
   console.log(`Salon Billing API at http://localhost:${PORT}`);
