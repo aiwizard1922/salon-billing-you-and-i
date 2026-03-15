@@ -15,6 +15,7 @@ const migrationOrder = [
   'db/migrations/001-staff-memberships-clients.sql',
   'db/migrations/002-inventory-products.sql',
   'db/migrations/003-digital-catalog.sql',
+  'db/seed-services.sql',
   'db/migrations/004-crm.sql',
   'db/migrations/005-staff-management.sql',
   'db/migrations/006-membership-enhancements.sql',

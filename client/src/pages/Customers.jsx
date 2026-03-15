@@ -11,6 +11,7 @@ export default function Customers() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ name: '', phone: '', email: '', gender: '', notes: '' });
   const [search, setSearch] = useState('');
+  const [saveError, setSaveError] = useState('');
 
   const load = () => {
     fetch(`${API}/customers`)
@@ -39,37 +40,27 @@ export default function Customers() {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!form.name?.trim() || !form.phone?.trim()) return;
+    setSaveError('');
     const payload = { ...form, gender: form.gender || null };
-    if (editingId) {
-      fetch(`${API}/customers/${editingId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+    const url = editingId ? `${API}/customers/${editingId}` : `${API}/customers`;
+    const method = editingId ? 'PUT' : 'POST';
+    fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) {
+          setForm({ name: '', phone: '', email: '', gender: '', notes: '' });
+          setShowForm(false);
+          setEditingId(null);
+          load();
+        } else {
+          setSaveError(d.error || 'Failed to save. Check database connection.');
+        }
       })
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.success) {
-            setForm({ name: '', phone: '', email: '', gender: '', notes: '' });
-            setShowForm(false);
-            setEditingId(null);
-            load();
-          }
-        });
-    } else {
-      fetch(`${API}/customers`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.success) {
-            setForm({ name: '', phone: '', email: '', gender: '', notes: '' });
-            setShowForm(false);
-            load();
-          }
-        });
-    }
+      .catch((err) => setSaveError(err.message || 'Request failed. Is the server running?'));
   };
 
   const startEdit = (c) => {
@@ -102,6 +93,9 @@ export default function Customers() {
       {showForm && (
         <form onSubmit={handleSubmit} className="mb-8 p-6 bg-white rounded-xl shadow border">
           <h3 className="font-semibold text-slate-800 mb-4">{editingId ? 'Edit Customer' : 'New Customer'}</h3>
+          {saveError && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{saveError}</div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm text-slate-600 mb-1">Name *</label>

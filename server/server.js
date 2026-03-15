@@ -24,6 +24,29 @@ app.use(express.json());
 db.testConnection().catch(() => {});
 db.ensureDefaultAdmin().catch(() => {});
 
+app.get('/api/health', async (req, res) => {
+  try {
+    await db.pool.query('SELECT 1');
+    const r = await db.pool.query(
+      "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'invoices'"
+    );
+    const invoicesTableExists = Number(r.rows[0]?.count || 0) > 0;
+    res.json({
+      ok: true,
+      db: 'connected',
+      tablesReady: invoicesTableExists,
+      hint: invoicesTableExists ? null : 'Run migrations. Check Render Start Command is: node server/run-all-migrations.js && node server/server.js',
+    });
+  } catch (err) {
+    res.json({
+      ok: false,
+      db: 'error',
+      error: err.message,
+      hint: 'DATABASE_URL may be missing or wrong. Use Internal Database URL from your Render PostgreSQL.',
+    });
+  }
+});
+
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
