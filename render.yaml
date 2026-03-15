@@ -1,0 +1,17 @@
+# Render Blueprint - Salon Billing (combined frontend + backend)
+# See docs/RENDER_DEPLOY.md for step-by-step guide
+
+services:
+  - type: web
+    name: salon-billing
+    runtime: node
+    region: singapore
+
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true

@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -1155,6 +1156,18 @@ app.delete('/api/expenses/:id', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// Production: serve React build and SPA fallback
+const clientDist = path.join(__dirname, '../client/dist');
+if (require('fs').existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get('*', (req, res) => {
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ success: false, error: 'Not found' });
+    }
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Salon Billing API at http://localhost:${PORT}`);
