@@ -291,6 +291,106 @@ async function getMonthlySalesByMethod(months = 12) {
   }));
 }
 
+/**
+ * Daily report for a specific date: revenue by payment method.
+ * Uses IST (Asia/Kolkata) for date matching. Expenses added in API.
+ * Returns: { date, cash, upi, card, membership, revenue }
+ */
+async function getDailyReport(dateStr) {
+  const date = dateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const res = await pool.query(
+    `SELECT
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, 'cash')) = 'cash' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'cash' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as cash,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, '')) = 'upi' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'upi' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as upi,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(payment_method, '')) = 'card' AND secondary_payment_method IS NULL THEN total
+         WHEN LOWER(COALESCE(secondary_payment_method, '')) = 'card' THEN total - COALESCE(amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as card,
+       COALESCE(SUM(COALESCE(amount_from_membership, 0)), 0)::numeric as membership,
+       COALESCE(SUM(total), 0)::numeric as revenue
+     FROM invoices
+     FROM invoices
+     WHERE status = 'paid' AND DATE(paid_at) = $1::date`,
+    [date]
+  );
+  const row = res.rows[0] || {};
+  return {
+    date,
+    cash: Number(row.cash || 0),
+    upi: Number(row.upi || 0),
+    card: Number(row.card || 0),
+    membership: Number(row.membership || 0),
+    revenue: Number(row.revenue || 0),
+  };
+}
+
+/**
+ * Daily reports for last N days: each day's revenue by method + expenses + net.
+ * Returns array of { date, cash, upi, card, membership, revenue, expenses, net }
+ * Includes all days in range (zeros for days with no sales).
+ */
+async function getDailyReports(days = 14) {
+  const revRes = await pool.query(
+    `SELECT d::date::text as date,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(i.payment_method, 'cash')) = 'cash' AND i.secondary_payment_method IS NULL THEN i.total
+         WHEN LOWER(COALESCE(i.secondary_payment_method, '')) = 'cash' THEN i.total - COALESCE(i.amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as cash,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(i.payment_method, '')) = 'upi' AND i.secondary_payment_method IS NULL THEN i.total
+         WHEN LOWER(COALESCE(i.secondary_payment_method, '')) = 'upi' THEN i.total - COALESCE(i.amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as upi,
+       COALESCE(SUM(CASE
+         WHEN LOWER(COALESCE(i.payment_method, '')) = 'card' AND i.secondary_payment_method IS NULL THEN i.total
+         WHEN LOWER(COALESCE(i.secondary_payment_method, '')) = 'card' THEN i.total - COALESCE(i.amount_from_membership, 0)
+         ELSE 0 END
+       ), 0)::numeric as card,
+       COALESCE(SUM(COALESCE(i.amount_from_membership, 0)), 0)::numeric as membership,
+       COALESCE(SUM(i.total), 0)::numeric as revenue
+     FROM (
+       SELECT generate_series(CURRENT_DATE - ($1 || ' days')::interval, CURRENT_DATE, '1 day'::interval)::date as d
+     ) dates
+     LEFT JOIN invoices i ON DATE(i.paid_at) = dates.d AND i.status = 'paid'
+     GROUP BY d
+     ORDER BY d DESC`,
+    [days]
+  );
+  const expRes = await pool.query(
+    `SELECT expense_date::text as date, COALESCE(SUM(amount), 0)::numeric as expenses
+     FROM expenses
+     WHERE expense_date >= CURRENT_DATE - INTERVAL '1 day' * $1
+     GROUP BY expense_date`,
+    [days]
+  );
+  const expMap = Object.fromEntries(expRes.rows.map((r) => [r.date, Number(r.expenses || 0)]));
+  return revRes.rows.map((r) => {
+    const revenue = Number(r.cash || 0) + Number(r.upi || 0) + Number(r.card || 0) + Number(r.membership || 0);
+    const expenses = expMap[r.date] ?? 0;
+    return {
+      date: r.date,
+      cash: Number(r.cash || 0),
+      upi: Number(r.upi || 0),
+      card: Number(r.card || 0),
+      membership: Number(r.membership || 0),
+      revenue,
+      expenses,
+      net: Math.round((revenue - expenses) * 100) / 100,
+    };
+  });
+}
+
 async function logWhatsApp(toPhone, messageType, status, errorMessage) {
   await pool.query(
     'INSERT INTO whatsapp_logs (to_phone, message_type, status, error_message) VALUES ($1, $2, $3, $4)',
@@ -629,6 +729,8 @@ module.exports = {
   getCustomers,
   getCustomersByIds,
   getDailySales,
+  getDailyReport,
+  getDailyReports,
   getMonthlySales,
   getDailySalesByMethod,
   getMonthlySalesByMethod,

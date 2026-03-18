@@ -18,6 +18,7 @@ const COLORS = {
   cash: '#F59E0B',
   upi: '#3B82F6',
   card: '#8B5CF6',
+  membership: '#64748B',
   revenue: '#3B82F6',
   profit: '#10B981',
 };
@@ -28,6 +29,8 @@ export default function Reports() {
   const [dailyByMethod, setDailyByMethod] = useState([]);
   const [monthlyByMethod, setMonthlyByMethod] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [dailyReports, setDailyReports] = useState([]);
+  const [dailyReportDays, setDailyReportDays] = useState(30);
 
   useEffect(() => {
     Promise.all([
@@ -35,16 +38,18 @@ export default function Reports() {
       fetch(`${API}/analytics/monthly?months=12`).then((r) => r.json()),
       fetch(`${API}/analytics/daily-by-method?days=30`).then((r) => r.json()),
       fetch(`${API}/analytics/monthly-by-method?months=12`).then((r) => r.json()),
+      fetch(`${API}/analytics/daily-reports?days=${dailyReportDays}`).then((r) => r.json()),
     ])
-      .then(([dRes, mRes, dmRes, mmRes]) => {
+      .then(([dRes, mRes, dmRes, mmRes, drRes]) => {
         if (dRes.success) setDaily(dRes.data.map((r) => ({ ...r, revenue: Number(r.revenue) })));
         if (mRes.success) setMonthly(mRes.data);
         if (dmRes.success) setDailyByMethod(dmRes.data);
         if (mmRes.success) setMonthlyByMethod(mmRes.data);
+        if (drRes.success) setDailyReports(drRes.data || []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [dailyReportDays]);
 
   if (loading) return <div className="text-slate-600">Loading...</div>;
 
@@ -68,6 +73,66 @@ export default function Reports() {
   return (
     <div>
       <h2 className="text-2xl font-bold text-slate-800 mb-6">Sales & Reports</h2>
+
+      {/* End of Day Report – each day's values */}
+      <div className="bg-white rounded-xl shadow p-6 border border-slate-200 mb-8">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+          <div>
+            <h3 className="font-semibold text-slate-800">End of Day Report</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Revenue by payment method for each day. Expenses deducted for net.
+            </p>
+          </div>
+          <label className="flex items-center gap-2">
+            <span className="text-sm text-slate-600">Show</span>
+            <select
+              value={dailyReportDays}
+              onChange={(e) => setDailyReportDays(Number(e.target.value))}
+              className="border rounded-lg px-3 py-2 text-sm"
+            >
+              <option value={7}>Last 7 days</option>
+              <option value={14}>Last 14 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={60}>Last 60 days</option>
+              <option value={90}>Last 90 days</option>
+            </select>
+          </label>
+        </div>
+        {dailyReports.length === 0 ? (
+          <p className="text-slate-500 py-8 text-center">No data for this period.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200">
+                  <th className="text-left py-2 px-3 font-medium text-slate-600">Date</th>
+                  <th className="text-right py-2 px-3 font-medium text-slate-600">Cash</th>
+                  <th className="text-right py-2 px-3 font-medium text-slate-600">UPI</th>
+                  <th className="text-right py-2 px-3 font-medium text-slate-600">Card</th>
+                  <th className="text-right py-2 px-3 font-medium text-slate-600">Member</th>
+                  <th className="text-right py-2 px-3 font-medium text-slate-600">Revenue</th>
+                  <th className="text-right py-2 px-3 font-medium text-slate-600">Expenses</th>
+                  <th className="text-right py-2 px-3 font-medium text-slate-600">Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyReports.map((row) => (
+                  <tr key={row.date} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="py-2 px-3 font-medium">{formatDate(row.date)}</td>
+                    <td className="py-2 px-3 text-right" style={{ color: COLORS.cash }}>{formatINR(row.cash)}</td>
+                    <td className="py-2 px-3 text-right" style={{ color: COLORS.upi }}>{formatINR(row.upi)}</td>
+                    <td className="py-2 px-3 text-right" style={{ color: COLORS.card }}>{formatINR(row.card)}</td>
+                    <td className="py-2 px-3 text-right" style={{ color: COLORS.membership }}>{formatINR(row.membership)}</td>
+                    <td className="py-2 px-3 text-right font-medium">{formatINR(row.revenue)}</td>
+                    <td className="py-2 px-3 text-right text-red-600">{formatINR(row.expenses)}</td>
+                    <td className="py-2 px-3 text-right font-medium" style={{ color: row.net >= 0 ? '#059669' : '#dc2626' }}>{formatINR(row.net)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {thisMonth && monthTotal > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
