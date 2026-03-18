@@ -721,6 +721,35 @@ async function getClientAnalytics(month = null) {
   };
 }
 
+async function tableExists(client, name) {
+  const r = await client.query(
+    "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1",
+    [name]
+  );
+  return r.rows.length > 0;
+}
+
+async function clearAllTestData() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (await tableExists(client, 'membership_usage')) await client.query('DELETE FROM membership_usage');
+    await client.query('DELETE FROM invoice_items');
+    await client.query('DELETE FROM invoices');
+    await client.query('DELETE FROM appointments');
+    if (await tableExists(client, 'customer_memberships')) await client.query('DELETE FROM customer_memberships');
+    if (await tableExists(client, 'expenses')) await client.query('DELETE FROM expenses');
+    if (await tableExists(client, 'customer_tags')) await client.query('DELETE FROM customer_tags');
+    await client.query('DELETE FROM customers');
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   pool,
   testConnection,
@@ -764,4 +793,5 @@ module.exports = {
   markInvoicePaid,
   logWhatsApp,
   getWhatsAppLogs,
+  clearAllTestData,
 };

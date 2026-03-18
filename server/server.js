@@ -89,6 +89,24 @@ app.get('/api/auth/me', (req, res) => {
   }
 });
 
+app.post('/api/admin/clear-test-data', async (req, res) => {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, error: 'Not authenticated' });
+  }
+  try {
+    jwt.verify(auth.slice(7), JWT_SECRET);
+  } catch {
+    return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
+  try {
+    await db.clearAllTestData();
+    res.json({ success: true, message: 'All test data cleared' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/api/analytics/daily', async (req, res) => {
   try {
     const days = Math.min(90, Math.max(7, parseInt(req.query.days, 10) || 30));
