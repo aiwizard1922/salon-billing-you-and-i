@@ -17,8 +17,7 @@ import ClientInsights from './pages/ClientInsights';
 import Inventory from './pages/Inventory';
 import Catalog from './pages/Catalog';
 import CustomerProfile from './pages/CustomerProfile';
-import Settings from './pages/Settings';
-import { LogOut, LayoutDashboard, Users, FilePlus, FileText, Calendar, Package, BookOpen, Megaphone, Gift, UserCheck, UserCog, BarChart3, Receipt, Settings as SettingsIcon } from 'lucide-react';
+import { LogOut, LayoutDashboard, Users, FilePlus, FileText, Calendar, Package, BookOpen, Megaphone, Gift, UserCheck, UserCog, BarChart3, Receipt } from 'lucide-react';
 
 const SIDEBAR_LINKS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -34,7 +33,6 @@ const SIDEBAR_LINKS = [
   { to: '/staff', label: 'Staff', icon: UserCog },
   { to: '/expenses', label: 'Expenses', icon: Receipt },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
 
 function NavLink({ to, label, icon: Icon }) {
@@ -98,7 +96,6 @@ function AppLayout() {
           <Route path="/staff" element={<Staff />} />
           <Route path="/expenses" element={<Expenses />} />
           <Route path="/reports" element={<Reports />} />
-          <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </main>
