@@ -1,4 +1,45 @@
 const { pool } = require('./database');
+const SEED_SERVICES = require('./data/services');
+
+function serviceDedupeKey(s) {
+  return `${String(s.name || '').trim().toLowerCase()}::${String(s.category || '').trim().toLowerCase()}`;
+}
+
+/** Merge DB catalog rows with built-in defaults so Quick Sales always lists both; DB wins on (name, category). */
+function mergeServicesWithSeedForQuickPick(dbRows) {
+  const rows = Array.isArray(dbRows) ? [...dbRows] : [];
+  const seenKeys = new Set(rows.map(serviceDedupeKey));
+  const usedIds = new Set(rows.map((r) => String(r.id)));
+  let seedCounter = 0;
+  for (const d of SEED_SERVICES) {
+    if (seenKeys.has(serviceDedupeKey(d))) continue;
+    seenKeys.add(serviceDedupeKey(d));
+    let id = d.id;
+    while (usedIds.has(String(id))) {
+      seedCounter += 1;
+      id = `seed-${seedCounter}`;
+    }
+    usedIds.add(String(id));
+    rows.push({
+      id,
+      name: d.name,
+      category: d.category,
+      price: d.price,
+      duration_mins: 30,
+      description: null,
+      is_active: true,
+      sort_order: 0,
+      created_at: null,
+      updated_at: null,
+    });
+  }
+  rows.sort((a, b) => {
+    const so = (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0);
+    if (so !== 0) return so;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+  return rows;
+}
 
 async function getServices(filters = {}) {
   let query = 'SELECT * FROM services WHERE 1=1';
@@ -6,6 +47,7 @@ async function getServices(filters = {}) {
   let idx = 1;
   if (filters.category) { query += ` AND category = $${idx}`; params.push(filters.category); idx++; }
   if (filters.active !== 'false') { query += ` AND is_active = TRUE`; }
+  query += ` AND NOT (TRIM(name) = 'Other (Custom)' AND category = 'Other')`;
   query += ' ORDER BY sort_order, name';
   const res = await pool.query(query, params);
   return res.rows;
@@ -39,6 +81,29 @@ async function updateService(id, data) {
 async function getServiceCategories() {
   const res = await pool.query('SELECT DISTINCT category FROM services ORDER BY category');
   return res.rows.map((r) => r.category);
+}
+
+/** Create or update service when billing a custom / combo / package line so it appears in catalog next time. */
+async function upsertServiceFromInvoiceLine({ name, price, category }) {
+  const n = (name || '').trim();
+  if (!n || n.startsWith('[')) return null;
+  const p = Number(price) || 0;
+  const cat = category || 'General';
+  const res = await pool.query(
+    `SELECT id FROM services WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND category = $2 AND is_active = TRUE LIMIT 1`,
+    [n, cat]
+  );
+  if (res.rows.length) {
+    await pool.query('UPDATE services SET price = $1, updated_at = NOW() WHERE id = $2', [p, res.rows[0].id]);
+    return getServiceById(res.rows[0].id);
+  }
+  return createService({
+    name: n,
+    category: cat,
+    price: p,
+    durationMins: 30,
+    description: null,
+  });
 }
 
 async function getPromotions(filters = {}) {
@@ -80,6 +145,8 @@ module.exports = {
   getServiceById,
   createService,
   updateService,
+  upsertServiceFromInvoiceLine,
+  mergeServicesWithSeedForQuickPick,
   getServiceCategories,
   getPromotions,
   createPromotion,

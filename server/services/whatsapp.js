@@ -71,9 +71,25 @@ async function sendTemplate(toPhone, templateName, components = [], languageCode
   }
 }
 
-async function sendAppointmentConfirmation({ customerPhone, customerName, date, time, services }) {
-  const svc = Array.isArray(services) ? services.join(', ') : services || 'Service';
-  return sendText(customerPhone, `Hi ${customerName || 'Customer'}! Your appointment is confirmed.\n\n📅 ${date}\n⏰ ${time}\n💇 ${svc}\n\nWe look forward to seeing you!`);
+async function sendAppointmentConfirmation({ customerPhone, customerName, date, time, services, serviceLines, staffName }) {
+  let svcBlock;
+  if (Array.isArray(serviceLines) && serviceLines.length > 0) {
+    svcBlock = serviceLines
+      .map((L) => {
+        const n = L.name || 'Service';
+        const st = L.staffName ? ` – ${L.staffName}` : '';
+        return `💇 ${n}${st}`;
+      })
+      .join('\n');
+  } else {
+    const svc = Array.isArray(services) ? services.join(', ') : services || 'Service';
+    const stylist = staffName ? `\n👤 Stylist: ${staffName}` : '';
+    svcBlock = `💇 ${svc}${stylist}`;
+  }
+  return sendText(
+    customerPhone,
+    `Hi ${customerName || 'Customer'}! Your appointment is confirmed.\n\n📅 ${date}\n⏰ ${time}\n${svcBlock}\n\nWe look forward to seeing you!`,
+  );
 }
 
 async function sendPaymentReceipt({ customerPhone, customerName, invoiceNumber, amount }) {

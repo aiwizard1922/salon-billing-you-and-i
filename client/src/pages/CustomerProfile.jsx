@@ -3,6 +3,9 @@ import { useParams, Link } from 'react-router-dom';
 import { User, FileText, Calendar, Tag, MessageSquare, Plus, DollarSign } from 'lucide-react';
 import { formatINR } from '../utils/formatCurrency';
 import { formatDateIST, formatDateTimeIST } from '../utils/ist';
+import { formatAppointmentTimeDisplay } from '../utils/appointmentSlots';
+import { formatAppointmentDateDisplay } from '../utils/ist';
+import { formatAppointmentServiceSummary } from '../utils/appointmentDisplay';
 
 const API = '/api';
 
@@ -107,7 +110,7 @@ export default function CustomerProfile() {
               to={`/invoices/new?customer=${customer.id}`}
               className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 self-center"
             >
-              <Plus size={18} /> New Invoice
+              <Plus size={18} /> Quick Sales
             </Link>
           </div>
         </div>
@@ -141,9 +144,13 @@ export default function CustomerProfile() {
               ) : (
                 <div className="space-y-2">
                   {appointments.map((a) => (
-                    <div key={a.id} className="flex justify-between items-center p-3 rounded-lg bg-slate-50">
-                      <span>{a.appointment_date} {a.appointment_time}</span>
-                      <span className="text-slate-600">{Array.isArray(a.services) ? a.services.join(', ') : a.services}</span>
+                    <div key={a.id} className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 p-3 rounded-lg bg-slate-50">
+                      <span className="text-slate-800">
+                        {formatAppointmentDateDisplay(a.appointment_date)} · {formatAppointmentTimeDisplay(a.appointment_time)}
+                      </span>
+                      <span className="text-slate-600 text-sm text-right sm:text-left">
+                        {formatAppointmentServiceSummary(a)}
+                      </span>
                     </div>
                   ))}
                 </div>

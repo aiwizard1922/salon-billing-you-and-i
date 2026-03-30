@@ -59,7 +59,10 @@ async function getCustomer360(customerId) {
       [customerId]
     ),
     pool.query(
-      `SELECT id, appointment_date, appointment_time, services, total_amount, status FROM appointments WHERE customer_id = $1 ORDER BY appointment_date DESC LIMIT 20`,
+      `SELECT a.id, a.appointment_date, a.appointment_time, a.services, a.service_lines, a.total_amount, a.status, a.staff_id, s.name AS staff_name
+       FROM appointments a
+       LEFT JOIN staff s ON s.id = a.staff_id
+       WHERE a.customer_id = $1 ORDER BY a.appointment_date DESC, a.appointment_time DESC LIMIT 20`,
       [customerId]
     ),
     pool.query('SELECT pref_key, pref_value FROM customer_preferences WHERE customer_id = $1', [customerId]),
@@ -82,7 +85,7 @@ async function getCustomer360(customerId) {
   return {
     customer,
     invoices: invoices.rows,
-    appointments: appointments.rows,
+    appointments: await db.enrichAppointmentRowsWithServiceLines(appointments.rows),
     preferences: preferences.rows.reduce((o, r) => ({ ...o, [r.pref_key]: r.pref_value }), {}),
     tags: tags.rows.map((r) => r.tag),
     notes: notes.rows,

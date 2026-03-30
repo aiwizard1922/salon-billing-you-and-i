@@ -17,5 +17,4 @@ module.exports = [
   { id: '16', name: 'Organic Pedicure', price: 650, category: 'Pedicure' },
   { id: '17', name: 'Gel Polish Application', price: 900, category: 'Nails' },
   { id: '18', name: 'Body Polishing', price: 4000, category: 'Body' },
-  { id: '19', name: 'Other (Custom)', price: 0, category: 'Other' },
 ];

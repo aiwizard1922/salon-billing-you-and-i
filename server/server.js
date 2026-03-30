@@ -13,6 +13,48 @@ const dbStaffMgmt = require('./db-staff-management');
 const dbExpenses = require('./db-expenses');
 const whatsapp = require('./services/whatsapp');
 
+/** Block past calendar dates and same-day times that are not after “now” in Asia/Kolkata. */
+function assertAppointmentNotInPastIST(appointmentDate, appointmentTime) {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  if (appointmentDate < today) {
+    const err = new Error('Appointment date cannot be in the past');
+    err.code = 400;
+    throw err;
+  }
+  if (appointmentDate > today) return;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const nh = parseInt(parts.find((p) => p.type === 'hour').value, 10);
+  const nm = parseInt(parts.find((p) => p.type === 'minute').value, 10);
+  const nowM = nh * 60 + nm;
+  const tt = String(appointmentTime).slice(0, 5);
+  const tp = tt.split(':');
+  const th = parseInt(tp[0], 10);
+  const tm = parseInt(tp[1] || '0', 10);
+  if (!Number.isFinite(th) || !Number.isFinite(tm)) {
+    const err = new Error('Invalid appointment time');
+    err.code = 400;
+    throw err;
+  }
+  if (th * 60 + tm <= nowM) {
+    const err = new Error('For today, choose a time after the current time (IST)');
+    err.code = 400;
+    throw err;
+  }
+}
+
+function normalizeInvoicePayMethod(m) {
+  const s = String(m || '').trim().toLowerCase();
+  if (s === 'upi') return 'upi';
+  if (s === 'card') return 'card';
+  if (s === 'cash') return 'cash';
+  return s;
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || 'salon-billing-secret-change-in-production';
 
 const app = express();
@@ -130,6 +172,104 @@ app.get('/api/analytics/monthly-by-method', async (req, res) => {
     const months = Math.min(24, Math.max(3, parseInt(req.query.months, 10) || 12));
     const data = await db.getMonthlySalesByMethod(months);
     res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/analytics/line-items', async (req, res) => {
+  try {
+    const days = Math.min(730, Math.max(7, parseInt(req.query.days, 10) || 90));
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 7));
+    const data = await db.getPaidInvoiceLineItemAggregates(days, limit);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** Sales performance: services & products by range, staff table, attendance hints, top performer. */
+app.get('/api/analytics/sales-performance', async (req, res) => {
+  try {
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    const { from, to } = req.query;
+    if (!from || !to || !re.test(from) || !re.test(to)) {
+      return res.status(400).json({ success: false, error: 'from and to required as YYYY-MM-DD' });
+    }
+    if (from > to) return res.status(400).json({ success: false, error: 'from must be <= to' });
+    const limit = Math.min(60, Math.max(7, parseInt(req.query.limit, 10) || 40));
+
+    const [lineItems, revenueTotals, staffSales, attendance] = await Promise.all([
+      db.getPaidLineItemAggregatesByDateRange(from, to, limit),
+      db.getLineItemRevenueTotalsByDateRange(from, to),
+      db.getStaffSalesByDateRange(from, to),
+      db.getStaffAttendanceSummaryByDateRange(from, to),
+    ]);
+
+    const attMap = new Map(attendance.map((a) => [a.staffId, a]));
+    const withSales = staffSales.filter((s) => s.totalSales > 0);
+    const sortedBySales = [...withSales].sort((a, b) => b.totalSales - a.totalSales);
+    const leader = sortedBySales[0] || null;
+
+    let topPerformer = null;
+    if (leader) {
+      const att = attMap.get(leader.staffId);
+      const away = (att?.absentDays || 0) + (att?.leaveDays || 0) + (att?.halfDays || 0);
+      const feedback = [];
+      feedback.push(
+        `Led the salon with ₹${Number(leader.totalSales).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in attributed sales (services, retail, and membership on paid and pending invoices).`,
+      );
+      const memPct = Number(leader.membershipSales) || 0;
+      if (memPct > 0) {
+        feedback.push(
+          `Includes ₹${memPct.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in membership sales—their total includes membership as well as services and products.`,
+        );
+      }
+      if ((leader.serviceSales || 0) > 0 && (leader.productSales || 0) > 0) {
+        feedback.push('Balanced services and retail on invoices where this staff was assigned.');
+      } else if ((leader.productSales || 0) > (leader.serviceSales || 0)) {
+        feedback.push('Especially strong on product sales—great upsell momentum.');
+      } else if ((leader.serviceSales || 0) > 0 || memPct === 0) {
+        feedback.push('Primary strength on services—keep booking them on busy slots.');
+      }
+      if (!att || att.entries === 0) {
+        feedback.push(
+          'Punctuality: log attendance under Staff → Attendance to track leave and highlight reliability here.',
+        );
+      } else if (away === 0) {
+        feedback.push('Attendance: no absences or leave in the period—sets a punctual example.');
+      } else if (away <= 2) {
+        feedback.push(`Attendance: ${away} away or partial day(s)—overall dependable for the salon.`);
+      } else {
+        feedback.push(
+          `Attendance: ${away} away or partial day(s)—worth aligning on schedule and coverage.`,
+        );
+      }
+      topPerformer = {
+        staffId: leader.staffId,
+        staffName: leader.staffName,
+        totalSales: leader.totalSales,
+        serviceSales: leader.serviceSales,
+        productSales: leader.productSales,
+        membershipSales: leader.membershipSales ?? 0,
+        lineCount: leader.lineCount,
+        feedback,
+      };
+    }
+
+    res.json({
+      success: true,
+      data: {
+        from,
+        to,
+        services: lineItems.services,
+        products: lineItems.products,
+        revenueTotals,
+        staffSales,
+        attendanceByStaff: attendance,
+        topPerformer,
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -260,19 +400,56 @@ app.get('/api/appointments', async (req, res) => {
 
 app.post('/api/appointments', async (req, res) => {
   try {
-    const { customerId, appointmentDate, appointmentTime, services, totalAmount, notes } = req.body;
+    const { customerId, appointmentDate, appointmentTime, services, serviceLines, totalAmount, notes, staffId } = req.body;
     if (!customerId || !appointmentDate || !appointmentTime) {
       return res.status(400).json({ success: false, error: 'customerId, date, time required' });
     }
-    const appt = await db.createAppointment({ customerId, appointmentDate, appointmentTime, services, totalAmount, notes });
+    const hasServices =
+      (Array.isArray(serviceLines) && serviceLines.some((L) => String(L?.name || '').trim())) ||
+      (Array.isArray(services) && services.some((s) => String(s || '').trim()));
+    if (!hasServices) {
+      return res.status(400).json({ success: false, error: 'At least one service is required' });
+    }
+    try {
+      assertAppointmentNotInPastIST(appointmentDate, appointmentTime);
+    } catch (e) {
+      if (e.code === 400) return res.status(400).json({ success: false, error: e.message });
+      throw e;
+    }
+    const appt = await db.createAppointment({
+      customerId,
+      appointmentDate,
+      appointmentTime,
+      services,
+      serviceLines,
+      totalAmount,
+      notes,
+      staffId,
+    });
     const customer = await db.getCustomerById(customerId);
+    let staffName = null;
+    if (staffId) {
+      const st = await db.getStaffById(Number(staffId));
+      staffName = st?.name || null;
+    }
+    let whatsappServiceLines = null;
+    if (Array.isArray(appt.service_lines) && appt.service_lines.length > 0) {
+      const ids = appt.service_lines.map((L) => L.staffId).filter(Boolean);
+      const smap = await db.getStaffNameMap(ids);
+      whatsappServiceLines = appt.service_lines.map((L) => ({
+        name: L.name,
+        staffName: L.staffId ? smap[Number(L.staffId)] ?? null : null,
+      }));
+    }
     if (customer?.phone && whatsapp.isConfigured()) {
       const r = await whatsapp.sendAppointmentConfirmation({
         customerPhone: customer.phone,
         customerName: customer.name,
         date: appointmentDate,
         time: appointmentTime,
-        services,
+        services: appt.services,
+        serviceLines: whatsappServiceLines,
+        staffName,
       });
       await db.logWhatsApp(customer.phone, 'appointment_confirmation', r.ok ? 'sent' : 'failed', r.error);
     }
@@ -306,16 +483,44 @@ app.get('/api/invoices/:id', async (req, res) => {
 
 app.post('/api/invoices', async (req, res) => {
   try {
-    const { customerId, customer, items, taxPercent, discountPercent, appointmentId, notes, staffId, sendWhatsApp } = req.body;
+    const {
+      customerId,
+      customer,
+      items,
+      taxPercent,
+      cgstPercent,
+      sgstPercent,
+      igstPercent,
+      serviceTaxPercent,
+      discountPercent,
+      discountType,
+      discountFixed,
+      appointmentId,
+      notes,
+      staffId,
+      sendWhatsApp,
+    } = req.body;
     const hasItems = Array.isArray(items) && items.length > 0 && items.some((i) => i?.service_name?.trim());
     if (!hasItems) {
       return res.status(400).json({ success: false, error: 'Add at least one service with a name (e.g. Hair Cut, Facial)' });
     }
     let resolvedCustomerId = customerId ? Number(customerId) : null;
+    let customerMatchNotice = null;
     if (customer && String(customer.name || '').trim() && String(customer.phone || '').trim()) {
-      const c = await db.findOrCreateCustomer({ name: customer.name.trim(), phone: customer.phone.trim(), gender: customer.gender || null });
-      if (!c) return res.status(400).json({ success: false, error: 'Could not create or find customer' });
+      const requestedName = customer.name.trim();
+      const c = await db.findOrCreateCustomer({
+        name: requestedName,
+        phone: customer.phone.trim(),
+        gender: customer.gender || null,
+      });
+      if (!c) return res.status(400).json({ success: false, error: 'Could not create or find customer. Enter name and a phone number with digits (e.g. 10-digit mobile).' });
       resolvedCustomerId = c.id;
+      const savedName = (c.name || '').trim();
+      if (savedName.toLowerCase() !== requestedName.toLowerCase()) {
+        customerMatchNotice =
+          `This phone is already on file as "${savedName}". This invoice is linked to that customer — you will not see "${requestedName}" as a separate person. ` +
+          `Update the name under Customers, or use a different phone for a new profile.`;
+      }
     }
     if (!resolvedCustomerId) {
       return res.status(400).json({ success: false, error: 'Select an existing customer or enter name and phone for a new one' });
@@ -324,40 +529,138 @@ app.post('/api/invoices', async (req, res) => {
       customerId: Number(resolvedCustomerId),
       items,
       taxPercent: taxPercent ?? 5,
-      discountPercent: req.body.discountPercent ?? 0,
+      cgstPercent,
+      sgstPercent,
+      igstPercent,
+      serviceTaxPercent,
+      discountPercent: discountPercent ?? 0,
+      discountType: discountType === 'fixed' ? 'fixed' : 'percent',
+      discountFixed: discountFixed ?? 0,
       appointmentId,
       notes,
       staffId: staffId ? Number(staffId) : null,
     });
 
-    // Always return success immediately after creating invoice.
-    // WhatsApp is attempted in background; never blocks or fails invoice creation.
-    res.status(201).json({ success: true, data: { ...data, whatsappSent: null, whatsappError: null } });
+    for (const item of items || []) {
+      const name = String(item.service_name || '').trim();
+      if (!name) continue;
+      try {
+        const lineKind = item.lineKind || '';
+        const serviceMode = item.serviceMode || '';
+        const productMode = item.productMode || '';
+        const syncCustomProduct =
+          lineKind === 'product' && productMode === 'custom' && /^\[Product\]/i.test(name);
+        const syncPackage = lineKind === 'package';
+        const syncCustomService =
+          lineKind === 'service' &&
+          serviceMode === 'custom' &&
+          !name.startsWith('[') &&
+          !/^gift\s*card$/i.test(name);
+        const legacy =
+          item.syncNewToCatalog === true &&
+          (item.syncTarget === 'product' || item.syncTarget === 'package' || item.syncTarget === 'service');
+        const legacyProduct = legacy && item.syncTarget === 'product';
+        const legacyPackage = legacy && item.syncTarget === 'package';
+        const legacyService =
+          legacy &&
+          item.syncTarget === 'service' &&
+          !name.startsWith('[') &&
+          !/^gift\s*card$/i.test(name);
 
-    if (data.customer_phone && whatsapp.isConfigured() && sendWhatsApp !== false) {
-      (async () => {
-        try {
-          const r = await whatsapp.sendInvoiceBill({
-            customerPhone: data.customer_phone,
-            customerName: data.customer_name,
-            invoiceNumber: data.invoice_number,
-            items: data.items || [],
-            total: data.total,
-            businessName: process.env.BUSINESS_NAME,
+        if (syncCustomProduct || legacyProduct) {
+          await dbInventory.upsertProductFromInvoiceLine(item.service_name, item.unit_price);
+        } else if (syncPackage || legacyPackage) {
+          await dbCatalog.upsertServiceFromInvoiceLine({
+            name,
+            price: item.unit_price,
+            category: 'Package',
           });
-          await db.logWhatsApp(data.customer_phone, 'invoice_bill', r.ok ? 'sent' : 'failed', r.error);
-          if (!r.ok) console.log('[WhatsApp] Invoice bill failed:', r.error, '| to:', data.customer_phone);
-          else console.log('[WhatsApp] Invoice bill sent to', data.customer_phone);
-        } catch (err) {
-          await db.logWhatsApp(data.customer_phone, 'invoice_bill', 'failed', err.message);
-          console.log('[WhatsApp] Invoice bill error:', err.message);
+        } else if (syncCustomService || legacyService) {
+          await dbCatalog.upsertServiceFromInvoiceLine({
+            name,
+            price: item.unit_price,
+            category: 'Combo',
+          });
         }
-      })();
-    } else if (!data.customer_phone) {
-      console.log('[WhatsApp] Skipped: customer has no phone number');
-    } else if (!whatsapp.isConfigured()) {
-      console.log('[WhatsApp] Skipped: WA_PHONE_NUMBER_ID or WA_ACCESS_TOKEN not set');
+      } catch (syncErr) {
+        console.error('[Invoice] Catalog sync failed:', name, syncErr.message);
+      }
     }
+
+    const membershipAssignWarnings = [];
+    const cid = Number(resolvedCustomerId);
+    for (const item of items) {
+      const rawPid = item?.membership_plan_id;
+      const pid = rawPid != null && rawPid !== '' ? Number(rawPid) : NaN;
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      const plan = await db.getMembershipPlanById(pid);
+      if (!plan) {
+        membershipAssignWarnings.push({ planId: pid, error: 'Plan not found' });
+        continue;
+      }
+      const qty = Number(item.quantity) || 1;
+      const lineTotal = Math.round(Number(item.unit_price || 0) * qty * 100) / 100;
+      const catalogCredit = Number(plan.special_price ?? plan.price) || 0;
+      const creditAmount = lineTotal > 0 ? lineTotal : catalogCredit;
+      try {
+        await db.assignMembershipToCustomer({
+          customerId: cid,
+          planId: pid,
+          startDate: null,
+          endDate: null,
+          notes: `Purchased on invoice ${data.invoice_number}`,
+          creditAmount,
+        });
+      } catch (assignErr) {
+        console.error('[Invoice] Membership assignment failed:', assignErr.message);
+        membershipAssignWarnings.push({ planId: pid, error: assignErr.message });
+      }
+    }
+
+    const userWantedWhatsApp = sendWhatsApp !== false;
+    let whatsappSent = null;
+    let whatsappError = null;
+
+    if (data.customer_phone && whatsapp.isConfigured() && userWantedWhatsApp) {
+      try {
+        const r = await whatsapp.sendInvoiceBill({
+          customerPhone: data.customer_phone,
+          customerName: data.customer_name,
+          invoiceNumber: data.invoice_number,
+          items: data.items || [],
+          total: data.total,
+          businessName: process.env.BUSINESS_NAME,
+        });
+        await db.logWhatsApp(data.customer_phone, 'invoice_bill', r.ok ? 'sent' : 'failed', r.error);
+        whatsappSent = r.ok;
+        whatsappError = r.ok ? null : (r.error || 'Failed');
+        if (!r.ok) console.log('[WhatsApp] Invoice bill failed:', r.error, '| to:', data.customer_phone);
+        else console.log('[WhatsApp] Invoice bill sent to', data.customer_phone);
+      } catch (err) {
+        await db.logWhatsApp(data.customer_phone, 'invoice_bill', 'failed', err.message);
+        whatsappSent = false;
+        whatsappError = err.message;
+        console.log('[WhatsApp] Invoice bill error:', err.message);
+      }
+    } else if (userWantedWhatsApp && !data.customer_phone) {
+      whatsappError = 'No phone number';
+    } else if (userWantedWhatsApp && data.customer_phone && !whatsapp.isConfigured()) {
+      whatsappError = 'WhatsApp not configured';
+    }
+
+    const whatsappFeedback = userWantedWhatsApp
+      ? { whatsappSent, whatsappError }
+      : {};
+
+    res.status(201).json({
+      success: true,
+      data: {
+        ...data,
+        ...whatsappFeedback,
+        ...(customerMatchNotice ? { customerMatchNotice } : {}),
+        ...(membershipAssignWarnings.length ? { membershipAssignWarnings } : {}),
+      },
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -365,17 +668,21 @@ app.post('/api/invoices', async (req, res) => {
 
 app.post('/api/invoices/:id/pay', async (req, res) => {
   try {
-    const { paymentMethod, staffId, membershipId, secondaryPaymentMethod } = req.body;
+    const { paymentMethod, staffId, membershipId, secondaryPaymentMethod, primaryAmount, secondaryAmount } = req.body;
     const invoiceId = Number(req.params.id);
     const invoice = await db.getInvoiceById(invoiceId);
     if (!invoice) return res.status(404).json({ success: false, error: 'Invoice not found' });
     if (invoice.status === 'paid') return res.status(400).json({ success: false, error: 'Invoice already paid' });
 
     const total = Number(invoice.total) || 0;
-    let amountFromMembership = 0;
-    let finalPaymentMethod = paymentMethod || 'cash';
+    const tenderMethods = ['cash', 'upi', 'card'];
 
-    if ((paymentMethod || '').toLowerCase() === 'membership') {
+    let amountFromMembership = 0;
+    let finalPaymentMethod = normalizeInvoicePayMethod(paymentMethod) || 'cash';
+    let secMethodOut = null;
+    let paymentSplitByMethod = null;
+
+    if (finalPaymentMethod === 'membership') {
       let activeMembership;
       if (membershipId) {
         activeMembership = await db.getMembershipByIdAndCustomer(Number(membershipId), invoice.customer_id);
@@ -391,16 +698,16 @@ app.post('/api/invoices/:id/pay', async (req, res) => {
       const balance = Number(activeMembership.remaining_balance) || 0;
       if (balance <= 0) return res.status(400).json({ success: false, error: 'Membership has no remaining balance.' });
       amountFromMembership = Math.min(balance, total);
-      const remainder = total - amountFromMembership;
+      const remainder = Math.round((total - amountFromMembership) * 100) / 100;
       if (remainder > 0) {
-        const secondary = (secondaryPaymentMethod || '').trim().toLowerCase();
-        if (!['cash', 'upi', 'card'].includes(secondary)) {
+        secMethodOut = normalizeInvoicePayMethod(secondaryPaymentMethod);
+        if (!tenderMethods.includes(secMethodOut)) {
           return res.status(400).json({
             success: false,
             error: `Membership balance (₹${balance.toFixed(2)}) covers ₹${amountFromMembership.toFixed(2)}. Pay remaining ₹${remainder.toFixed(2)} via Cash, UPI, or Card.`,
           });
         }
-        finalPaymentMethod = `membership+${secondary}`;
+        finalPaymentMethod = `membership+${secMethodOut}`;
       }
       const commissionPct = activeMembership.staff_commission_percent ?? 5;
       await dbMembership.recordMembershipRedemption({
@@ -411,11 +718,41 @@ app.post('/api/invoices/:id/pay', async (req, res) => {
         staffId: staffId ? Number(staffId) : null,
         staffIncentivePercent: commissionPct,
       });
+    } else {
+      const secRaw = String(secondaryPaymentMethod || '').trim();
+      if (secRaw) {
+        secMethodOut = normalizeInvoicePayMethod(secondaryPaymentMethod);
+        if (!tenderMethods.includes(finalPaymentMethod) || !tenderMethods.includes(secMethodOut)) {
+          return res.status(400).json({ success: false, error: 'Split payment: choose two of Cash, UPI, or Card.' });
+        }
+        if (finalPaymentMethod === secMethodOut) {
+          return res.status(400).json({ success: false, error: 'Use two different payment methods for a split payment.' });
+        }
+        const aPaise = Math.round(Number(primaryAmount) * 100);
+        const bPaise = Math.round(Number(secondaryAmount) * 100);
+        const totalPaise = Math.round(total * 100);
+        if (!Number.isFinite(aPaise) || !Number.isFinite(bPaise) || aPaise <= 0 || bPaise <= 0) {
+          return res.status(400).json({ success: false, error: 'Enter the amount for each part of the payment.' });
+        }
+        if (aPaise + bPaise !== totalPaise) {
+          return res.status(400).json({
+            success: false,
+            error: `Amounts must add up to ₹${(totalPaise / 100).toFixed(2)} (exact invoice total). You entered ₹${((aPaise + bPaise) / 100).toFixed(2)}.`,
+          });
+        }
+        paymentSplitByMethod = {
+          [finalPaymentMethod]: aPaise / 100,
+          [secMethodOut]: bPaise / 100,
+        };
+      } else if (!tenderMethods.includes(finalPaymentMethod)) {
+        return res.status(400).json({ success: false, error: 'Invalid payment method.' });
+      }
     }
 
     const updated = await db.markInvoicePaid(invoiceId, finalPaymentMethod, {
-      amountFromMembership: amountFromMembership > 0 ? amountFromMembership : 0,
-      secondaryPaymentMethod: amountFromMembership > 0 && total > amountFromMembership ? secondaryPaymentMethod : null,
+      amountFromMembership,
+      secondaryPaymentMethod: secMethodOut,
+      paymentSplitByMethod,
     });
     const customer = await db.getCustomerById(updated.customer_id);
     if (customer?.phone && whatsapp.isConfigured()) {
@@ -436,7 +773,7 @@ app.post('/api/invoices/:id/pay', async (req, res) => {
 app.get('/api/services', async (req, res) => {
   try {
     const data = await dbCatalog.getServices(req.query);
-    res.json({ success: true, data: data?.length ? data : require('./data/services') });
+    res.json({ success: true, data: dbCatalog.mergeServicesWithSeedForQuickPick(data) });
   } catch {
     res.json({ success: true, data: require('./data/services') });
   }
@@ -990,6 +1327,15 @@ app.get('/api/analytics/clients', async (req, res) => {
   try {
     const month = req.query.month || null;
     const data = await db.getClientAnalytics(month);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/analytics/clients/summary', async (req, res) => {
+  try {
+    const data = await db.getClientInsightsSummary();
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

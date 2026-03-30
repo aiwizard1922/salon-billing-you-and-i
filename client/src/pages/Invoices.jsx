@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Search, Plus } from 'lucide-react';
 import { formatINR } from '../utils/formatCurrency';
+import { formatDateIST } from '../utils/ist';
 
 const API = '/api';
 
 export default function Invoices() {
+  const location = useLocation();
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -14,17 +16,21 @@ export default function Invoices() {
 
   const load = () => {
     setLoading(true);
+    setError(null);
     let url = `${API}/invoices`;
     if (filter === 'membership') url += '?membership=true';
     else if (filter !== 'all') url += `?status=${filter}`;
     fetch(url)
       .then((r) => r.json())
-      .then((d) => (d.success ? setInvoices(d.data) : setError(d.error)))
-      .catch((e) => setError(e.message))
+      .then((d) => (d.success ? setInvoices(d.data) : setError(d.error || 'Could not load invoices')))
+      .catch((e) => setError(e.message || 'Network error'))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => load(), [filter]);
+  // Reload when filter changes or when you navigate here again (e.g. after Quick Sales).
+  useEffect(() => {
+    load();
+  }, [filter, location.key]);
 
   const pending = invoices.filter((i) => i.status === 'pending');
   const paid = invoices.filter((i) => i.status === 'paid');
@@ -48,7 +54,7 @@ export default function Invoices() {
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-slate-800">Invoices</h2>
         <Link to="/invoices/new" className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700">
-          <Plus size={18} /> New Invoice
+          <Plus size={18} /> Quick Sales
         </Link>
       </div>
       {error && (
@@ -84,7 +90,14 @@ export default function Invoices() {
       </div>
       <div className="bg-white rounded-xl shadow overflow-hidden">
         {displayList.length === 0 ? (
-          <p className="p-8 text-center text-slate-500">No invoices found.</p>
+          <div className="p-8 text-center text-slate-500">
+            <p>No invoices match{searchLower ? ' your search' : ''}.</p>
+            {searchLower ? (
+              <button type="button" onClick={() => setSearch('')} className="mt-3 text-sm text-amber-700 hover:underline">
+                Clear search
+              </button>
+            ) : null}
+          </div>
         ) : (
           <table className="w-full">
             <thead className="bg-slate-50">
@@ -105,7 +118,7 @@ export default function Invoices() {
                     </Link>
                   </td>
                   <td className="py-3 px-4 text-slate-700">{inv.customer_name}</td>
-                  <td className="py-3 px-4 text-slate-600">{inv.invoice_date}</td>
+                  <td className="py-3 px-4 text-slate-600">{formatDateIST(inv.invoice_date)}</td>
                   <td className="py-3 px-4 text-right font-medium">{formatINR(inv.total)}</td>
                   <td className="py-3 px-4 text-center">
                     <span className={`px-2 py-1 rounded text-xs ${inv.status === 'paid' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>

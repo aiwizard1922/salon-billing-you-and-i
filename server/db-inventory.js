@@ -52,6 +52,35 @@ async function createProduct({ name, sku, category, unit, costPrice, sellingPric
   return res.rows[0];
 }
 
+/** Create or update product when billing a custom retail line (stored as [Product] name on invoice). */
+async function upsertProductFromInvoiceLine(serviceName, unitPrice) {
+  const raw = String(serviceName || '')
+    .trim()
+    .replace(/^\[Product\]\s*/i, '')
+    .trim();
+  if (!raw) return null;
+  const price = Number(unitPrice) || 0;
+  const found = await pool.query(
+    `SELECT id FROM products WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND is_active = TRUE LIMIT 1`,
+    [raw]
+  );
+  if (found.rows.length) {
+    await pool.query('UPDATE products SET selling_price = $1, updated_at = NOW() WHERE id = $2', [price, found.rows[0].id]);
+    return getProductById(found.rows[0].id);
+  }
+  return createProduct({
+    name: raw,
+    sku: null,
+    category: 'Retail',
+    unit: 'pcs',
+    costPrice: 0,
+    sellingPrice: price,
+    quantity: 0,
+    lowStockThreshold: 5,
+    supplierId: null,
+  });
+}
+
 async function updateProduct(id, data) {
   const p = await getProductById(id);
   if (!p) return null;
@@ -100,6 +129,7 @@ module.exports = {
   getProducts,
   getProductById,
   createProduct,
+  upsertProductFromInvoiceLine,
   updateProduct,
   adjustProductStock,
   getLowStockProducts,
