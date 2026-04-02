@@ -11,7 +11,7 @@ BEGIN
     SET notes = trim(both E'\n' from concat_ws(E'\n',
       nullif(trim(both from coalesce(notes, '')), ''),
       'PAY_SPLIT_JSON:' || (
-        jsonb_strip_null(
+        jsonb_strip_nulls(
           jsonb_build_object(lower(trim(payment_method::text)), to_jsonb(primary_payment_amount))
           || jsonb_build_object(lower(trim(secondary_payment_method::text)), to_jsonb(secondary_payment_amount))
         )
