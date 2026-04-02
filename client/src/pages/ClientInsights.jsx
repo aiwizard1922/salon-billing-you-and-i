@@ -14,12 +14,32 @@ const COLORS = {
   unknown: '#94A3B8',
 };
 
+const SUMMARY_PERIODS = [
+  { key: 'today', label: 'Today' },
+  { key: 'yesterday', label: 'Yesterday' },
+  { key: 'last7Days', label: 'Last 7 days' },
+  { key: 'last30Days', label: 'Last 30 days' },
+  { key: 'monthToDate', label: 'This month (so far)' },
+];
+
+function formatPeriodRange(p) {
+  if (!p?.startDate) return '–';
+  const short = { day: 'numeric', month: 'short' };
+  const full = { ...short, year: 'numeric' };
+  if (p.startDate === p.endDate) {
+    return formatDateIST(p.startDate, full);
+  }
+  return `${formatDateIST(p.startDate, short)} – ${formatDateIST(p.endDate, full)}`;
+}
+
 export default function ClientInsights() {
   const [data, setData] = useState(null);
+  const [summary, setSummary] = useState(null);
   const [month, setMonth] = useState(istMonthStr());
   const [loading, setLoading] = useState(true);
+  const [summaryLoading, setSummaryLoading] = useState(true);
 
-  const load = () => {
+  const loadMonth = () => {
     setLoading(true);
     fetch(`${API}/analytics/clients?month=${month}`)
       .then((r) => r.json())
@@ -30,10 +50,22 @@ export default function ClientInsights() {
   };
 
   useEffect(() => {
-    load();
+    loadMonth();
   }, [month]);
 
-  if (loading && !data) return <div className="text-slate-600">Loading...</div>;
+  useEffect(() => {
+    setSummaryLoading(true);
+    fetch(`${API}/analytics/clients/summary`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setSummary(d.data);
+      })
+      .finally(() => setSummaryLoading(false));
+  }, []);
+
+  if (loading && !data && summaryLoading && !summary) {
+    return <div className="text-slate-600">Loading...</div>;
+  }
 
   const formatMonth = (m) => {
     if (!m) return '';
@@ -55,16 +87,17 @@ export default function ClientInsights() {
     invoiceDateRange: null,
   };
 
-  const totalGender = d.male + d.female + d.other + d.unknown;
-  const dailyStats = d.dailyStats || [];
-  const range = d.invoiceDateRange;
+  const totalGender = d.male + d.female + d.other + d.unknownGender;
+  const dailyStats = [...(d.dailyStats || [])].sort((a, b) =>
+    String(b.date).localeCompare(String(a.date))
+  );
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
         <h2 className="text-2xl font-bold text-slate-800">Client Insights</h2>
         <div className="flex items-center gap-2">
-          <label className="text-sm text-slate-600">Month:</label>
+          <label className="text-sm text-slate-600">Month</label>
           <input
             type="month"
             value={month}
@@ -74,17 +107,68 @@ export default function ClientInsights() {
         </div>
       </div>
 
-      <p className="text-sm text-slate-500 mb-6">
-        Based on <strong>invoices created</strong> only. &quot;New&quot; = first invoice ever for that customer. &quot;Returning&quot; = customer had an invoice before. Daily table shows counts per day; monthly totals are unique customers.
-      </p>
+      <section className="mb-10">
+        <h3 className="text-lg font-semibold text-slate-800 mb-3">At a glance</h3>
+
+        {summaryLoading && !summary && (
+          <div className="text-sm text-slate-500 py-4">Loading summary…</div>
+        )}
+
+        {summary && (
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow">
+            <table className="min-w-[960px] w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 text-left text-slate-600 border-b border-slate-200">
+                  <th className="px-3 py-3 font-semibold">Period</th>
+                  <th className="px-3 py-3 font-semibold">Dates</th>
+                  <th className="px-3 py-3 font-semibold text-right">Clients</th>
+                  <th className="px-3 py-3 font-semibold text-right">New</th>
+                  <th className="px-3 py-3 font-semibold text-right">Returning</th>
+                  <th className="px-3 py-3 font-semibold text-right">Men</th>
+                  <th className="px-3 py-3 font-semibold text-right">Women</th>
+                  <th className="px-3 py-3 font-semibold text-right">Other</th>
+                  <th className="px-3 py-3 font-semibold text-right">Not set</th>
+                </tr>
+              </thead>
+              <tbody>
+                {SUMMARY_PERIODS.map(({ key, label }) => {
+                  const p = summary[key];
+                  if (!p) return null;
+                  return (
+                    <tr key={key} className="border-b border-slate-100 hover:bg-slate-50/80">
+                      <td className="px-3 py-3 font-medium text-slate-800 whitespace-nowrap">{label}</td>
+                      <td className="px-3 py-3 text-slate-600 whitespace-nowrap">{formatPeriodRange(p)}</td>
+                      <td className="px-3 py-3 text-right tabular-nums font-medium text-slate-800">{p.totalVisited}</td>
+                      <td className="px-3 py-3 text-right tabular-nums" style={{ color: COLORS.new }}>
+                        {p.newClients}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums" style={{ color: COLORS.returning }}>
+                        {p.returningClients}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums" style={{ color: COLORS.male }}>
+                        {p.male}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums" style={{ color: COLORS.female }}>
+                        {p.female}
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums text-amber-700">{p.other}</td>
+                      <td className="px-3 py-3 text-right tabular-nums text-slate-500">{p.unknownGender}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {d.totalVisited === 0 && d.invoiceDateRange && (
         <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm flex flex-col gap-2">
           <span>
-            No invoices for {formatMonth(d.month)}. Your {d.invoiceDateRange.totalInvoices} invoice(s) are from{' '}
+            No activity in {formatMonth(d.month)}
             {d.invoiceDateRange.min && d.invoiceDateRange.max
-              ? `${formatDateIST(d.invoiceDateRange.min, { month: 'short', year: 'numeric' })} to ${formatDateIST(d.invoiceDateRange.max, { month: 'short', year: 'numeric' })}`
-              : 'other months'}
+              ? ` (${d.invoiceDateRange.totalInvoices} invoice(s) elsewhere: ${formatDateIST(d.invoiceDateRange.min, { month: 'short', year: 'numeric' })}–${formatDateIST(d.invoiceDateRange.max, { month: 'short', year: 'numeric' })})`
+              : ''}
             .
           </span>
           {d.invoiceDateRange.min && (
@@ -100,10 +184,10 @@ export default function ClientInsights() {
       )}
 
       {d.totalVisited === 0 && data && !data.invoiceDateRange && (
-        <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-sm">
-          No invoices in the database yet. Create invoices to see client insights.
-        </div>
+        <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-sm">No invoices yet.</div>
       )}
+
+      <h3 className="text-lg font-semibold text-slate-800 mb-4">{formatMonth(d.month)}</h3>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
         <div className="bg-white rounded-xl shadow p-6 border border-slate-200">
@@ -114,7 +198,6 @@ export default function ClientInsights() {
           <p className="text-2xl font-bold text-slate-800 mt-2" style={{ color: COLORS.total }}>
             {d.totalVisited}
           </p>
-          <p className="text-sm text-slate-500">{formatMonth(d.month)}</p>
         </div>
         <div className="bg-white rounded-xl shadow p-6 border border-slate-200">
           <div className="flex justify-between items-center">
@@ -142,11 +225,8 @@ export default function ClientInsights() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow p-6 border border-slate-200">
-        <h3 className="font-semibold text-slate-800 mb-4">Gender breakdown</h3>
-        <p className="text-xs text-slate-500 mb-4">
-          Based on gender set in customer profile. Add gender when creating/editing customers.
-        </p>
+      <div className="bg-white rounded-xl shadow p-6 border border-slate-200 mb-8">
+        <h3 className="font-semibold text-slate-800 mb-4">Gender</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="p-4 rounded-lg border" style={{ borderColor: COLORS.male }}>
             <div className="flex items-center gap-2 mb-1">
@@ -188,6 +268,40 @@ export default function ClientInsights() {
           </div>
         </div>
       </div>
+
+      {dailyStats.length > 0 && (
+        <div className="bg-white rounded-xl shadow p-6 border border-slate-200">
+          <h3 className="font-semibold text-slate-800 mb-4">By day</h3>
+          <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+            <table className="min-w-[480px] w-full text-sm">
+              <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
+                <tr className="text-left text-slate-600">
+                  <th className="px-3 py-2 font-semibold">Date</th>
+                  <th className="px-3 py-2 font-semibold text-right">New</th>
+                  <th className="px-3 py-2 font-semibold text-right">Returning</th>
+                  <th className="px-3 py-2 font-semibold text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyStats.map((row) => (
+                  <tr key={row.date} className="border-b border-slate-100">
+                    <td className="px-3 py-2 text-slate-800 whitespace-nowrap">
+                      {formatDateIST(row.date, { weekday: 'short', day: 'numeric', month: 'short' })}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums" style={{ color: COLORS.new }}>
+                      {row.newCount}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums" style={{ color: COLORS.returning }}>
+                      {row.returningCount}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-800">{row.total}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

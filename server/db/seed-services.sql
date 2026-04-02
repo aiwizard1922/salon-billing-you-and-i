@@ -19,6 +19,5 @@ INSERT INTO services (name, category, price, duration_mins, sort_order) VALUES
   ('Organic Manicure', 'Manicure', 650, 45, 15),
   ('Organic Pedicure', 'Pedicure', 650, 45, 16),
   ('Gel Polish Application', 'Nails', 900, 60, 17),
-  ('Body Polishing', 'Body', 4000, 90, 18),
-  ('Other (Custom)', 'Other', 0, 30, 19)
+  ('Body Polishing', 'Body', 4000, 90, 18)
 ON CONFLICT (name, category) DO NOTHING;

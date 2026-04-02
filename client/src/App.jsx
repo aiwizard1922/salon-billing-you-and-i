@@ -21,9 +21,9 @@ import { LogOut, LayoutDashboard, Users, FilePlus, FileText, Calendar, Package, 
 
 const SIDEBAR_LINKS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/customers', label: 'Customers', icon: Users },
+  { to: '/invoices/new', label: 'Quick Sales', icon: FilePlus },
   { to: '/invoices', label: 'Invoices', icon: FileText },
-  { to: '/invoices/new', label: 'New Invoice', icon: FilePlus },
+  { to: '/customers', label: 'Customers', icon: Users },
   { to: '/appointments', label: 'Appointments', icon: Calendar },
   { to: '/inventory', label: 'Inventory', icon: Package },
   { to: '/catalog', label: 'Catalog', icon: BookOpen },
@@ -37,7 +37,14 @@ const SIDEBAR_LINKS = [
 
 function NavLink({ to, label, icon: Icon }) {
   const location = useLocation();
-  const isActive = to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
+  const path = location.pathname;
+  let isActive = false;
+  if (to === '/') isActive = path === '/';
+  else if (to === '/invoices') {
+    isActive = path === '/invoices' || /^\/invoices\/\d+/.test(path);
+  } else {
+    isActive = path === to || (path.startsWith(`${to}/`) && to !== '/');
+  }
   return (
     <Link
       to={to}
