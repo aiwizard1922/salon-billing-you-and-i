@@ -6,6 +6,7 @@ Step-by-step guide for **combined** deployment: one Web Service runs both the Re
 
 ## Before You Start
 
+- [ ] Read **`docs/SAFE_DEPLOY_DATABASE.md`** — Git does not push your local DB; production uses **`DATABASE_URL`** on the host only.
 - [ ] GitHub repo: `salon-billing-you-and-i` (code pushed)
 - [ ] Render account: [render.com](https://render.com)
 - [ ] Domain: `uandisalon.in` (managed in Hostinger)

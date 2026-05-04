@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { formatINR } from '../utils/formatCurrency';
 import { getBookableTimeOptions, formatAppointmentTimeDisplay } from '../utils/appointmentSlots';
-import { Calendar, Clock, UserRound } from 'lucide-react';
+import { Calendar, Clock, UserRound, Search } from 'lucide-react';
 import {
   istDateStr,
   formatAppointmentDateDisplay,
@@ -9,6 +9,7 @@ import {
   isAppointmentUpcomingInIST,
 } from '../utils/ist';
 import { formatAppointmentServiceSummary } from '../utils/appointmentDisplay';
+import { SearchableCatalogPicker } from '../components/SearchableCatalogPicker';
 
 const API = '/api';
 const HISTORY_DAYS_BACK = 90;
@@ -82,14 +83,36 @@ export default function Appointments() {
   const [services, setServices] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [bookError, setBookError] = useState('');
+  const [bookingInfo, setBookingInfo] = useState('');
+  const [customerMode, setCustomerMode] = useState('existing');
+  const [customerId, setCustomerId] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const customerDropdownRef = useRef(null);
+  const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', gender: '' });
+  const [servicePickerKey, setServicePickerKey] = useState(0);
   const [form, setForm] = useState({
-    customerId: '',
     appointmentDate: '',
     appointmentTime: '',
     lines: [],
     totalAmount: 0,
     notes: '',
   });
+
+  const servicePickerOptions = useMemo(
+    () =>
+      services.map((s) => ({
+        value: String(s.id),
+        label: s.name,
+        sublabel: `${s.category || 'General'} · ${formatINR(Number(s.price) || 0)}`,
+      })),
+    [services]
+  );
+
+  const staffPickerOptions = useMemo(
+    () => staff.map((s) => ({ value: String(s.id), label: s.name })),
+    [staff]
+  );
 
   const load = () => {
     const from = istDateStr(new Date(Date.now() - HISTORY_DAYS_BACK * 86400000));
@@ -141,11 +164,41 @@ export default function Appointments() {
     });
   }, [form.appointmentDate]);
 
-  useEffect(() => {
-    load();
+  const reloadCustomers = () => {
     fetch(`${API}/customers`)
       .then((r) => r.json())
       .then((d) => d.success && setCustomers(d.data));
+  };
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target)) {
+        setShowCustomerDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const customerSearchLower = String(customerSearch || '').trim().toLowerCase();
+  const customerSearchDigits = customerSearchLower.replace(/\D/g, '');
+  const filteredCustomersForSelect =
+    customerMode !== 'existing'
+      ? []
+      : !customerSearchLower
+        ? customers
+        : customers.filter((c) => {
+            const name = String(c.name || '').toLowerCase();
+            const phone = String(c.phone || '').replace(/\D/g, '');
+            return (
+              name.includes(customerSearchLower) ||
+              (customerSearchDigits.length > 0 && phone.includes(customerSearchDigits))
+            );
+          });
+
+  useEffect(() => {
+    load();
+    reloadCustomers();
     fetch(`${API}/staff`)
       .then((r) => r.json())
       .then((d) => d.success && setStaff(d.data || []));
@@ -154,9 +207,7 @@ export default function Appointments() {
       .then((d) => d.success && setServices(d.data));
   }, []);
 
-  const addService = (e) => {
-    const sel = e.target;
-    const serviceId = sel.value;
+  const addServiceById = (serviceId) => {
     if (!serviceId) return;
     const s = services.find((x) => String(x.id) === String(serviceId));
     if (!s) return;
@@ -170,7 +221,7 @@ export default function Appointments() {
       lines: [...f.lines, { key, catalogId: s.id, name: s.name, price, staffId: '' }],
       totalAmount: f.totalAmount + price,
     }));
-    sel.selectedIndex = 0;
+    setServicePickerKey((k) => k + 1);
   };
 
   const removeLine = (key) => {
@@ -193,7 +244,6 @@ export default function Appointments() {
   };
 
   const emptyForm = () => ({
-    customerId: '',
     appointmentDate: '',
     appointmentTime: '',
     lines: [],
@@ -201,36 +251,67 @@ export default function Appointments() {
     notes: '',
   });
 
+  const resetCustomerFields = () => {
+    setCustomerMode('existing');
+    setCustomerId('');
+    setCustomerSearch('');
+    setShowCustomerDropdown(false);
+    setNewCustomer({ name: '', phone: '', gender: '' });
+  };
+
   const submit = (e) => {
     e.preventDefault();
     setBookError('');
-    if (!form.customerId || !form.appointmentDate || !form.appointmentTime) return;
+    setBookingInfo('');
+    if (customerMode === 'existing') {
+      if (!customerId) {
+        setBookError('Select a customer');
+        return;
+      }
+    } else if (!newCustomer.name?.trim() || !newCustomer.phone?.trim()) {
+      setBookError('Enter name and phone for the new customer');
+      return;
+    }
+    if (!form.appointmentDate || !form.appointmentTime) return;
     if (form.lines.length === 0) {
       setBookError('Add at least one service');
       return;
     }
+    const payload = {
+      appointmentDate: form.appointmentDate,
+      appointmentTime: form.appointmentTime,
+      services: form.lines.map((l) => l.name),
+      serviceLines: form.lines.map((l) => ({
+        name: l.name,
+        staffId: l.staffId ? Number(l.staffId) : null,
+      })),
+      totalAmount: form.totalAmount,
+      notes: form.notes || undefined,
+    };
+    if (customerMode === 'existing') {
+      payload.customerId = Number(customerId);
+    } else {
+      payload.customer = {
+        name: newCustomer.name.trim(),
+        phone: newCustomer.phone.trim(),
+        gender: newCustomer.gender || undefined,
+      };
+    }
     fetch(`${API}/appointments`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        customerId: Number(form.customerId),
-        appointmentDate: form.appointmentDate,
-        appointmentTime: form.appointmentTime,
-        services: form.lines.map((l) => l.name),
-        serviceLines: form.lines.map((l) => ({
-          name: l.name,
-          staffId: l.staffId ? Number(l.staffId) : null,
-        })),
-        totalAmount: form.totalAmount,
-        notes: form.notes || undefined,
-      }),
+      body: JSON.stringify(payload),
     })
       .then((r) => r.json())
       .then((d) => {
         if (d.success) {
           setForm(emptyForm());
+          setServicePickerKey((k) => k + 1);
+          resetCustomerFields();
           setShowForm(false);
+          setBookingInfo(d.customerMatchNotice || '');
           load();
+          reloadCustomers();
         } else {
           setBookError(d.error || 'Could not book appointment');
         }
@@ -244,12 +325,31 @@ export default function Appointments() {
         <h2 className="text-2xl font-bold text-slate-800">Appointments</h2>
         <button
           type="button"
-          onClick={() => setShowForm(!showForm)}
+          onClick={() => {
+            setShowForm(!showForm);
+            if (showForm) {
+              setBookError('');
+              setBookingInfo('');
+            } else {
+              resetCustomerFields();
+              setForm(emptyForm());
+              setServicePickerKey((k) => k + 1);
+            }
+          }}
           className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 text-sm font-medium shrink-0"
         >
           {showForm ? 'Cancel' : '+ Book'}
         </button>
       </div>
+
+      {bookingInfo && (
+        <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm flex justify-between gap-3 items-start">
+          <span>{bookingInfo}</span>
+          <button type="button" className="text-amber-800 hover:underline shrink-0 text-xs" onClick={() => setBookingInfo('')}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {showForm && (
         <form onSubmit={submit} className="mb-8 p-6 bg-white rounded-xl shadow border border-slate-200">
@@ -257,23 +357,132 @@ export default function Appointments() {
           {bookError && (
             <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-100 text-red-700 text-sm">{bookError}</div>
           )}
+          <div className="mb-4 flex flex-wrap gap-4">
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
+              <input
+                type="radio"
+                name="apptCustomerMode"
+                checked={customerMode === 'existing'}
+                onChange={() => {
+                  setCustomerMode('existing');
+                  setBookError('');
+                }}
+              />
+              Existing customer
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
+              <input
+                type="radio"
+                name="apptCustomerMode"
+                checked={customerMode === 'new'}
+                onChange={() => {
+                  setCustomerMode('new');
+                  setCustomerId('');
+                  setCustomerSearch('');
+                  setShowCustomerDropdown(false);
+                  setBookError('');
+                }}
+              />
+              New customer
+            </label>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className="block text-sm text-slate-600 mb-1">Customer *</label>
-              <select
-                value={form.customerId}
-                onChange={(e) => setForm({ ...form, customerId: e.target.value })}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                required
-              >
-                <option value="">Select</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} – {c.phone}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {customerMode === 'existing' ? (
+              <div className="md:col-span-2">
+                <label className="block text-sm text-slate-600 mb-1">Customer *</label>
+                <div className="relative max-w-xl" ref={customerDropdownRef}>
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none z-10" />
+                  <input
+                    type="text"
+                    placeholder="Search by name or phone…"
+                    value={customerSearch}
+                    onChange={(e) => {
+                      setCustomerSearch(e.target.value);
+                      setCustomerId('');
+                      setShowCustomerDropdown(true);
+                    }}
+                    onFocus={() => setShowCustomerDropdown(true)}
+                    className="w-full pl-9 pr-8 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                    autoComplete="off"
+                  />
+                  {customerId && (
+                    <button
+                      type="button"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      title="Clear"
+                      onClick={() => {
+                        setCustomerId('');
+                        setCustomerSearch('');
+                        setShowCustomerDropdown(false);
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                  {showCustomerDropdown && (
+                    <div className="absolute z-20 left-0 right-0 top-full mt-1 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg">
+                      {filteredCustomersForSelect.length === 0 ? (
+                        <div className="px-3 py-4 text-sm text-slate-500">No customers match</div>
+                      ) : (
+                        filteredCustomersForSelect.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => {
+                              setCustomerId(String(c.id));
+                              setCustomerSearch(`${c.name} – ${c.phone}`);
+                              setShowCustomerDropdown(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${String(customerId) === String(c.id) ? 'bg-amber-50 text-amber-900' : ''}`}
+                          >
+                            {c.name} – {c.phone}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">Name *</label>
+                  <input
+                    type="text"
+                    value={newCustomer.name}
+                    onChange={(e) => setNewCustomer((p) => ({ ...p, name: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Customer name"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">Phone *</label>
+                  <input
+                    type="tel"
+                    value={newCustomer.phone}
+                    onChange={(e) => setNewCustomer((p) => ({ ...p, phone: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                    placeholder="Mobile number"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-xs text-slate-500 mb-1">Gender (optional)</label>
+                  <select
+                    value={newCustomer.gender}
+                    onChange={(e) => setNewCustomer((p) => ({ ...p, gender: e.target.value }))}
+                    className="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full sm:w-48"
+                  >
+                    <option value="">Not set</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <p className="sm:col-span-2 text-xs text-slate-500">
+                  They will be added to your customer list when you book. If the phone already exists, we link to that profile.
+                </p>
+              </div>
+            )}
             <div>
               <label className="block text-sm text-slate-600 mb-1">Date *</label>
               <input
@@ -310,14 +519,15 @@ export default function Appointments() {
             </div>
             <div className="md:col-span-2">
               <label className="block text-sm text-slate-600 mb-1">Add service</label>
-              <select onChange={addService} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm">
-                <option value="">Select a service to add</option>
-                {services.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} – {formatINR(s.price)}
-                  </option>
-                ))}
-              </select>
+              <SearchableCatalogPicker
+                key={servicePickerKey}
+                value=""
+                onChange={(v) => {
+                  if (v) addServiceById(v);
+                }}
+                options={servicePickerOptions}
+                emptyLabel="Search service to add…"
+              />
             </div>
           </div>
           {form.lines.length > 0 && (
@@ -331,24 +541,20 @@ export default function Appointments() {
                     <span className="font-medium text-slate-800">{line.name}</span>
                     <span className="text-slate-600 text-sm ml-2">{formatINR(line.price)}</span>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <select
-                      value={line.staffId}
-                      onChange={(e) => setLineStaff(line.key, e.target.value)}
-                      className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm min-w-[140px]"
-                      aria-label={`Staff for ${line.name}`}
-                    >
-                      <option value="">Staff</option>
-                      {staff.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+                    <div className="min-w-[10rem] sm:w-44 flex-1 sm:flex-initial">
+                      <SearchableCatalogPicker
+                        className="w-full"
+                        value={line.staffId ? String(line.staffId) : ''}
+                        onChange={(v) => setLineStaff(line.key, v)}
+                        options={staffPickerOptions}
+                        emptyLabel="Staff"
+                      />
+                    </div>
                     <button
                       type="button"
                       onClick={() => removeLine(line.key)}
-                      className="text-red-600 font-bold px-2 py-1 rounded hover:bg-red-50 text-sm"
+                      className="text-red-600 font-bold px-2 py-1 rounded hover:bg-red-50 text-sm shrink-0"
                     >
                       Remove
                     </button>

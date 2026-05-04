@@ -199,6 +199,7 @@ Set up the daily backup script (see `scripts/backup-db.sh` and `docs/WHATSAPP_SE
 
 ## Checklist Before Going Live
 
+- [ ] Read **`docs/SAFE_DEPLOY_DATABASE.md`** (production `DATABASE_URL` is set only on the host, not via Git)
 - [ ] `JWT_SECRET` is a strong random value (not the default)
 - [ ] `DATABASE_URL` is correct and reachable
 - [ ] Default admin password changed (or use `add-admins` migration)

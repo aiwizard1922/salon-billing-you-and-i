@@ -102,7 +102,7 @@ function AppLayout() {
           <Route path="/clients" element={<ClientInsights />} />
           <Route path="/staff" element={<Staff />} />
           <Route path="/expenses" element={<Expenses />} />
-          <Route path="/reports" element={<Reports />} />
+          <Route path="/reports/*" element={<Reports />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </main>

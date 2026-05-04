@@ -118,6 +118,12 @@ export default function InvoiceView() {
   );
 
   const subtotal = Number(invoice.subtotal);
+  const lineItemsGross = (invoice.items || []).reduce((s, it) => s + Number(it.total || 0), 0);
+  const hasMembershipLine = (invoice.items || []).some((it) =>
+    String(it.service_name || it.description || '').toLowerCase().startsWith('[membership]'),
+  );
+  const showMembershipBundleHint =
+    hasMembershipLine && Math.round(lineItemsGross * 100) > Math.round(subtotal * 100) + 1;
   const taxAmountTotal = Number(invoice.tax_amount) || 0;
   const hasStoredTaxBreakdown =
     invoice.cgst_percent != null ||
@@ -187,6 +193,14 @@ export default function InvoiceView() {
       <div className="mb-6 flex gap-2 flex-wrap no-print">
         <button type="button" onClick={() => navigate('/invoices')} className="px-4 py-2 border rounded-lg hover:bg-slate-100">← Back to Invoices</button>
         <button type="button" onClick={() => window.print()} className="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700">Print</button>
+        <a
+          href={`${API}/invoices/${id}/pdf`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-slate-800 text-sm font-medium"
+        >
+          Download PDF
+        </a>
       </div>
       <div className="bg-white rounded-xl shadow p-8 max-w-3xl print:shadow-none">
         <div className="text-center border-b border-slate-200 pb-4 mb-6">
@@ -250,6 +264,12 @@ export default function InvoiceView() {
             ))}
           </tbody>
         </table>
+
+        {showMembershipBundleHint && (
+          <p className="text-xs text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2 mb-4">
+            Service and product lines above are covered from the new membership wallet (their value is deducted from the balance when this bill was created). Only the membership plan amount (plus tax) was due in cash — see Taxable Value below.
+          </p>
+        )}
 
         <div className="flex justify-end">
           <div className="w-80 space-y-2">

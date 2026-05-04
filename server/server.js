@@ -1,6 +1,6 @@
-require('dotenv').config();
-const express = require('express');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
@@ -12,6 +12,7 @@ const dbCrm = require('./db-crm');
 const dbStaffMgmt = require('./db-staff-management');
 const dbExpenses = require('./db-expenses');
 const whatsapp = require('./services/whatsapp');
+const invoiceEmail = require('./services/invoiceEmail');
 
 /** Block past calendar dates and same-day times that are not after “now” in Asia/Kolkata. */
 function assertAppointmentNotInPastIST(appointmentDate, appointmentTime) {
@@ -199,61 +200,49 @@ app.get('/api/analytics/sales-performance', async (req, res) => {
     if (from > to) return res.status(400).json({ success: false, error: 'from must be <= to' });
     const limit = Math.min(60, Math.max(7, parseInt(req.query.limit, 10) || 40));
 
-    const [lineItems, revenueTotals, staffSales, attendance] = await Promise.all([
+    const [lineItems, revenueTotals, staffSales, staffDailyRows, attendance] = await Promise.all([
       db.getPaidLineItemAggregatesByDateRange(from, to, limit),
       db.getLineItemRevenueTotalsByDateRange(from, to),
       db.getStaffSalesByDateRange(from, to),
+      db.getStaffDailySalesByDateRange(from, to),
       db.getStaffAttendanceSummaryByDateRange(from, to),
     ]);
 
-    const attMap = new Map(attendance.map((a) => [a.staffId, a]));
-    const withSales = staffSales.filter((s) => s.totalSales > 0);
-    const sortedBySales = [...withSales].sort((a, b) => b.totalSales - a.totalSales);
-    const leader = sortedBySales[0] || null;
+    const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const withRanking = staffSales.map((s) => ({
+      ...s,
+      rankingTotal: round2((Number(s.serviceSales) || 0) + (Number(s.productSales) || 0)),
+    }));
+    /** Sort: higher service+product revenue first; ties broken by membership line count (not membership ₹). */
+    const compareStaffRank = (a, b) => {
+      const moneyDiff = b.rankingTotal - a.rankingTotal;
+      if (moneyDiff !== 0) return moneyDiff;
+      const mc =
+        (Number(b.membershipLineCount) || 0) - (Number(a.membershipLineCount) || 0);
+      if (mc !== 0) return mc;
+      return String(a.staffName).localeCompare(String(b.staffName));
+    };
+    const pool = withRanking.filter(
+      (s) =>
+        s.rankingTotal > 0 || (Number(s.membershipLineCount) || 0) > 0,
+    );
+    const sortedByRanking = [...pool].sort(compareStaffRank);
+    const leader = sortedByRanking[0] || null;
 
     let topPerformer = null;
     if (leader) {
-      const att = attMap.get(leader.staffId);
-      const away = (att?.absentDays || 0) + (att?.leaveDays || 0) + (att?.halfDays || 0);
-      const feedback = [];
-      feedback.push(
-        `Led the salon with ₹${Number(leader.totalSales).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in attributed sales (services, retail, and membership on paid and pending invoices).`,
-      );
-      const memPct = Number(leader.membershipSales) || 0;
-      if (memPct > 0) {
-        feedback.push(
-          `Includes ₹${memPct.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in membership sales—their total includes membership as well as services and products.`,
-        );
-      }
-      if ((leader.serviceSales || 0) > 0 && (leader.productSales || 0) > 0) {
-        feedback.push('Balanced services and retail on invoices where this staff was assigned.');
-      } else if ((leader.productSales || 0) > (leader.serviceSales || 0)) {
-        feedback.push('Especially strong on product sales—great upsell momentum.');
-      } else if ((leader.serviceSales || 0) > 0 || memPct === 0) {
-        feedback.push('Primary strength on services—keep booking them on busy slots.');
-      }
-      if (!att || att.entries === 0) {
-        feedback.push(
-          'Punctuality: log attendance under Staff → Attendance to track leave and highlight reliability here.',
-        );
-      } else if (away === 0) {
-        feedback.push('Attendance: no absences or leave in the period—sets a punctual example.');
-      } else if (away <= 2) {
-        feedback.push(`Attendance: ${away} away or partial day(s)—overall dependable for the salon.`);
-      } else {
-        feedback.push(
-          `Attendance: ${away} away or partial day(s)—worth aligning on schedule and coverage.`,
-        );
-      }
       topPerformer = {
         staffId: leader.staffId,
         staffName: leader.staffName,
+        rankingTotal: leader.rankingTotal,
         totalSales: leader.totalSales,
         serviceSales: leader.serviceSales,
         productSales: leader.productSales,
         membershipSales: leader.membershipSales ?? 0,
         lineCount: leader.lineCount,
-        feedback,
+        serviceLineCount: leader.serviceLineCount ?? 0,
+        productLineCount: leader.productLineCount ?? 0,
+        membershipLineCount: leader.membershipLineCount ?? 0,
       };
     }
 
@@ -266,10 +255,27 @@ app.get('/api/analytics/sales-performance', async (req, res) => {
         products: lineItems.products,
         revenueTotals,
         staffSales,
+        staffDailyRows,
         attendanceByStaff: attendance,
         topPerformer,
       },
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** Daily breakdown: per date, per staff — service / product / membership sales (attributed lines). */
+app.get('/api/analytics/staff-daily-sales', async (req, res) => {
+  try {
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    const { from, to } = req.query;
+    if (!from || !to || !re.test(from) || !re.test(to)) {
+      return res.status(400).json({ success: false, error: 'from and to required as YYYY-MM-DD' });
+    }
+    if (from > to) return res.status(400).json({ success: false, error: 'from must be <= to' });
+    const rows = await db.getStaffDailySalesByDateRange(from, to);
+    res.json({ success: true, data: { from, to, rows } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -301,6 +307,18 @@ app.get('/api/analytics/daily-report', async (req, res) => {
     report.expenses = expensesTotal;
     report.net = Math.round((report.revenue - expensesTotal) * 100) / 100;
     res.json({ success: true, data: report });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** Daily P&L-style line breakdown (services, prepaid uses, products, memberships, discounts, taxes). */
+app.get('/api/analytics/daily-sheet', async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const data = await db.getDailySheetBreakdown(date);
+    if (!data) return res.status(400).json({ success: false, error: 'Invalid date (use YYYY-MM-DD)' });
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -400,9 +418,57 @@ app.get('/api/appointments', async (req, res) => {
 
 app.post('/api/appointments', async (req, res) => {
   try {
-    const { customerId, appointmentDate, appointmentTime, services, serviceLines, totalAmount, notes, staffId } = req.body;
-    if (!customerId || !appointmentDate || !appointmentTime) {
-      return res.status(400).json({ success: false, error: 'customerId, date, time required' });
+    const {
+      customerId,
+      customer: newCustomerBody,
+      appointmentDate,
+      appointmentTime,
+      services,
+      serviceLines,
+      totalAmount,
+      notes,
+      staffId,
+    } = req.body;
+
+    let resolvedCustomerId = null;
+    const cid = customerId;
+    if (cid != null && cid !== '' && Number.isFinite(Number(cid)) && Number(cid) > 0) {
+      resolvedCustomerId = Number(cid);
+    }
+
+    let customerMatchNotice = null;
+    if (
+      !resolvedCustomerId &&
+      newCustomerBody &&
+      String(newCustomerBody.name || '').trim() &&
+      String(newCustomerBody.phone || '').trim()
+    ) {
+      const requestedName = newCustomerBody.name.trim();
+      const c = await db.findOrCreateCustomer({
+        name: requestedName,
+        phone: newCustomerBody.phone.trim(),
+        gender: newCustomerBody.gender || null,
+      });
+      if (!c) {
+        return res.status(400).json({
+          success: false,
+          error: 'Could not create customer. Enter name and a phone number with digits (e.g. 10-digit mobile).',
+        });
+      }
+      resolvedCustomerId = c.id;
+      const savedName = (c.name || '').trim();
+      if (savedName.toLowerCase() !== requestedName.toLowerCase()) {
+        customerMatchNotice =
+          `This phone is already on file as "${savedName}". This appointment is linked to that customer. ` +
+          `Update the name under Customers, or use a different phone for a new profile.`;
+      }
+    }
+
+    if (!resolvedCustomerId || !appointmentDate || !appointmentTime) {
+      return res.status(400).json({
+        success: false,
+        error: 'Select an existing customer or enter name and phone for a new one; date and time are required',
+      });
     }
     const hasServices =
       (Array.isArray(serviceLines) && serviceLines.some((L) => String(L?.name || '').trim())) ||
@@ -417,7 +483,7 @@ app.post('/api/appointments', async (req, res) => {
       throw e;
     }
     const appt = await db.createAppointment({
-      customerId,
+      customerId: resolvedCustomerId,
       appointmentDate,
       appointmentTime,
       services,
@@ -426,7 +492,7 @@ app.post('/api/appointments', async (req, res) => {
       notes,
       staffId,
     });
-    const customer = await db.getCustomerById(customerId);
+    const customer = await db.getCustomerById(resolvedCustomerId);
     let staffName = null;
     if (staffId) {
       const st = await db.getStaffById(Number(staffId));
@@ -453,7 +519,11 @@ app.post('/api/appointments', async (req, res) => {
       });
       await db.logWhatsApp(customer.phone, 'appointment_confirmation', r.ok ? 'sent' : 'failed', r.error);
     }
-    res.status(201).json({ success: true, data: appt });
+    res.status(201).json({
+      success: true,
+      data: appt,
+      ...(customerMatchNotice ? { customerMatchNotice } : {}),
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -476,6 +546,23 @@ app.get('/api/invoices/:id', async (req, res) => {
     const data = await db.getInvoiceById(Number(req.params.id));
     if (!data) return res.status(404).json({ success: false, error: 'Not found' });
     res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/invoices/:id/pdf', async (req, res) => {
+  try {
+    const invoiceId = Number(req.params.id);
+    if (!Number.isFinite(invoiceId)) return res.status(400).json({ success: false, error: 'Invalid id' });
+    const invoice = await db.getInvoiceById(invoiceId);
+    if (!invoice) return res.status(404).json({ success: false, error: 'Not found' });
+    const { invoiceToPdfBuffer, shopFromEnv } = require('./services/invoicePdf');
+    const buf = await invoiceToPdfBuffer(invoice, shopFromEnv());
+    const name = `${String(invoice.invoice_number || `invoice-${invoice.id}`).replace(/[^\w.-]+/g, '_')}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(buf);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -588,6 +675,7 @@ app.post('/api/invoices', async (req, res) => {
     }
 
     const membershipAssignWarnings = [];
+    const assignedMembershipRows = [];
     const cid = Number(resolvedCustomerId);
     for (const item of items) {
       const rawPid = item?.membership_plan_id;
@@ -603,7 +691,7 @@ app.post('/api/invoices', async (req, res) => {
       const catalogCredit = Number(plan.special_price ?? plan.price) || 0;
       const creditAmount = lineTotal > 0 ? lineTotal : catalogCredit;
       try {
-        await db.assignMembershipToCustomer({
+        const membershipRow = await db.assignMembershipToCustomer({
           customerId: cid,
           planId: pid,
           startDate: null,
@@ -611,9 +699,63 @@ app.post('/api/invoices', async (req, res) => {
           notes: `Purchased on invoice ${data.invoice_number}`,
           creditAmount,
         });
+        assignedMembershipRows.push(membershipRow);
       } catch (assignErr) {
         console.error('[Invoice] Membership assignment failed:', assignErr.message);
         membershipAssignWarnings.push({ planId: pid, error: assignErr.message });
+      }
+    }
+
+    // Same invoice: pay membership only; today's services/products consume from the newly credited wallet.
+    if (assignedMembershipRows.length > 0 && db.isMembershipBundleInvoiceItems(items)) {
+      let remainingToRedeem = Math.round(db.getNonMembershipLinesTotal(items) * 100) / 100;
+      if (remainingToRedeem > 0) {
+        let firstServiceStaffId = null;
+        for (const it of items) {
+          if (db.isInvoiceItemMembershipLine(it)) continue;
+          const sid = it.staff_id != null && it.staff_id !== '' ? Number(it.staff_id) : null;
+          if (Number.isFinite(sid) && sid > 0) {
+            firstServiceStaffId = sid;
+            break;
+          }
+        }
+        let staffForRedemption = null;
+        if (firstServiceStaffId) {
+          const st = await db.getStaffById(firstServiceStaffId);
+          if (st) staffForRedemption = firstServiceStaffId;
+        }
+        for (const m of assignedMembershipRows) {
+          if (remainingToRedeem <= 0) break;
+          const bal = Math.round(Number(m.remaining_balance) * 100) / 100;
+          const take = Math.min(remainingToRedeem, bal);
+          if (take <= 0) continue;
+          const runRedemption = async (sid) => {
+            await dbMembership.recordMembershipRedemption({
+              customerMembershipId: m.id,
+              invoiceId: data.id,
+              amountRedeemed: take,
+              discountPercent: 0,
+              staffId: sid,
+            });
+          };
+          try {
+            await runRedemption(staffForRedemption);
+            remainingToRedeem = Math.round((remainingToRedeem - take) * 100) / 100;
+          } catch (redeemErr) {
+            if (staffForRedemption) {
+              try {
+                await runRedemption(null);
+                remainingToRedeem = Math.round((remainingToRedeem - take) * 100) / 100;
+              } catch (redeemErr2) {
+                console.error('[Invoice] Bundle membership redemption failed:', redeemErr2.message);
+                membershipAssignWarnings.push({ planId: m.plan_id, error: `Redemption: ${redeemErr2.message}` });
+              }
+            } else {
+              console.error('[Invoice] Bundle membership redemption failed:', redeemErr.message);
+              membershipAssignWarnings.push({ planId: m.plan_id, error: `Redemption: ${redeemErr.message}` });
+            }
+          }
+        }
       }
     }
 
@@ -764,6 +906,18 @@ app.post('/api/invoices/:id/pay', async (req, res) => {
       });
       await db.logWhatsApp(customer.phone, 'payment_receipt', r.ok ? 'sent' : 'failed', r.error);
     }
+
+    if (invoiceEmail.isNotifyReady()) {
+      const paidSnapshot = updated;
+      setImmediate(() => {
+        invoiceEmail.sendPaidInvoiceAdminNotify(paidSnapshot).then((er) => {
+          if (er.skipped) return;
+          if (er.ok) console.log('[Invoice email] Admin notify sent for paid', paidSnapshot.invoice_number);
+          else console.error('[Invoice email] Failed:', er.error);
+        }).catch((err) => console.error('[Invoice email] Error:', err.message));
+      });
+    }
+
     res.json({ success: true, data: updated });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1581,4 +1735,11 @@ if (clientDist) {
 
 app.listen(PORT, () => {
   console.log(`Salon Billing API at http://localhost:${PORT}`);
+  const rec = invoiceEmail.getRecipients();
+  if (rec.length > 0) {
+    const ready = invoiceEmail.isNotifyReady();
+    console.log(
+      `[Invoice email] Notify → ${rec.join(', ')} | SMTP ${ready ? 'ready (email when invoice marked paid)' : 'incomplete (set SMTP_HOST, SMTP_USER, SMTP_PASS in server/.env)'}`,
+    );
+  }
 });

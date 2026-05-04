@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Trash2, Search, Scissors, Package, Gift, Layers, CreditCard, CheckCircle2 } from 'lucide-react';
 import { formatINR } from '../utils/formatCurrency';
+import { SearchableCatalogPicker } from '../components/SearchableCatalogPicker';
 
 const API = '/api';
 
@@ -51,6 +52,18 @@ function resolvedInvoiceServiceName(item) {
     return n ? `[Product] ${n}` : '';
   }
   return String(item.service_name || '').trim();
+}
+
+function isMembershipLineItem(item) {
+  if (item.lineKind === 'membership') return true;
+  const raw = item.membership_plan_id;
+  if (raw != null && raw !== '' && Number.isFinite(Number(raw)) && Number(raw) > 0) return true;
+  return String(item.service_name || '').trim().toLowerCase().startsWith('[membership]');
+}
+
+function lineAmountForItem(item) {
+  if (!resolvedLineLabel(item)) return 0;
+  return Number(item.unit_price || 0) * (item.quantity || 1);
 }
 
 export default function NewInvoice() {
@@ -180,17 +193,6 @@ export default function NewInvoice() {
     });
   };
 
-  /** Group catalog services for dropdown; DB allows same name in different categories. */
-  const servicesByCategory = useMemo(() => {
-    const map = new Map();
-    for (const s of services) {
-      const cat = s.category || 'General';
-      if (!map.has(cat)) map.set(cat, []);
-      map.get(cat).push(s);
-    }
-    return [...map.entries()].sort(([a], [b]) => String(a).localeCompare(String(b)));
-  }, [services]);
-
   function catalogSelectValue(item) {
     if (item.lineKind !== 'service' || item.serviceMode === 'custom') return '';
     if (item.catalog_service_id != null && item.catalog_service_id !== '') {
@@ -205,6 +207,34 @@ export default function NewInvoice() {
     }
     return '';
   }
+
+  const onServiceCatalogSelect = (i, v) => {
+    if (v === '__custom__') {
+      setItemFields(i, {
+        serviceMode: 'custom',
+        catalog_service_id: null,
+        service_name: '',
+        unit_price: 0,
+      });
+      return;
+    }
+    if (!v) {
+      setItemFields(i, {
+        serviceMode: 'catalog',
+        catalog_service_id: null,
+        service_name: '',
+        unit_price: 0,
+      });
+      return;
+    }
+    const s = services.find((x) => String(x.id) === String(v));
+    setItemFields(i, {
+      serviceMode: 'catalog',
+      catalog_service_id: s?.id ?? null,
+      service_name: s?.name || '',
+      unit_price: s ? Number(s.price) || 0 : 0,
+    });
+  };
 
   const onProductSelect = (i, productId) => {
     if (productId === '__custom__') {
@@ -261,21 +291,65 @@ export default function NewInvoice() {
     }
   };
 
-  const rawSubtotal = items.reduce((s, i) => {
-    if (!resolvedLineLabel(i)) return s;
-    return s + Number(i.unit_price || 0) * (i.quantity || 1);
-  }, 0);
+  const servicePickerOptions = useMemo(
+    () =>
+      services.map((s) => ({
+        value: String(s.id),
+        label: s.name,
+        sublabel: `${s.category || 'General'} · ${formatINR(Number(s.price) || 0)}`,
+      })),
+    [services]
+  );
+
+  const productPickerOptions = useMemo(
+    () =>
+      products.map((p) => ({
+        value: String(p.id),
+        label: p.name,
+        sublabel: p.sku
+          ? `SKU ${p.sku} · ${formatINR(Number(p.selling_price) || 0)}`
+          : formatINR(Number(p.selling_price) || 0),
+      })),
+    [products]
+  );
+
+  const membershipPickerOptions = useMemo(
+    () =>
+      membershipPlans.map((pl) => {
+        const price = Number(pl.special_price ?? pl.price) || 0;
+        return {
+          value: String(pl.id),
+          label: pl.name,
+          sublabel: formatINR(price),
+        };
+      }),
+    [membershipPlans]
+  );
+
+  const staffPickerOptions = useMemo(
+    () => staff.map((s) => ({ value: String(s.id), label: s.name })),
+    [staff]
+  );
+
+  const rawSubtotal = items.reduce((s, i) => s + lineAmountForItem(i), 0);
+  const membershipLinesSubtotal = items.reduce((s, i) => s + (isMembershipLineItem(i) ? lineAmountForItem(i) : 0), 0);
+  const nonMembershipLinesSubtotal = items.reduce(
+    (s, i) => s + (!isMembershipLineItem(i) && resolvedLineLabel(i) ? lineAmountForItem(i) : 0),
+    0,
+  );
+  const isMembershipBundleSale = membershipLinesSubtotal > 0 && nonMembershipLinesSubtotal > 0;
+  const taxableBase = isMembershipBundleSale ? membershipLinesSubtotal : rawSubtotal;
   const effectiveTaxPercent =
     Math.max(0, Number(cgstPercent) || 0) +
     Math.max(0, Number(sgstPercent) || 0) +
     Math.max(0, Number(igstPercent) || 0) +
     Math.max(0, Number(serviceTaxPercent) || 0);
-  const cgstAmountLine = (rawSubtotal * Math.max(0, Number(cgstPercent) || 0)) / 100;
-  const sgstAmountLine = (rawSubtotal * Math.max(0, Number(sgstPercent) || 0)) / 100;
-  const igstAmountLine = (rawSubtotal * Math.max(0, Number(igstPercent) || 0)) / 100;
-  const serviceTaxAmountLine = (rawSubtotal * Math.max(0, Number(serviceTaxPercent) || 0)) / 100;
+  const cgstAmountLine = (taxableBase * Math.max(0, Number(cgstPercent) || 0)) / 100;
+  const sgstAmountLine = (taxableBase * Math.max(0, Number(sgstPercent) || 0)) / 100;
+  const igstAmountLine = (taxableBase * Math.max(0, Number(igstPercent) || 0)) / 100;
+  const serviceTaxAmountLine = (taxableBase * Math.max(0, Number(serviceTaxPercent) || 0)) / 100;
   const tax = cgstAmountLine + sgstAmountLine + igstAmountLine + serviceTaxAmountLine;
-  const totalBeforeDiscount = rawSubtotal + tax;
+  const totalBeforeDiscount = taxableBase + tax;
   const discountPctNum = Math.max(0, Math.min(100, Number(discountValue) || 0));
   const discountAmount =
     discountType === 'fixed'
@@ -529,7 +603,7 @@ export default function NewInvoice() {
                 checked={customerMode === 'new'}
                 onChange={() => { setCustomerMode('new'); setLookupFound(null); }}
               />
-              <span>New customer (add while creating invoice)</span>
+              <span>New customer</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -683,50 +757,13 @@ export default function NewInvoice() {
               <span className="text-xs text-slate-400 w-20 shrink-0 capitalize">{item.lineKind.replace('_', ' ')}</span>
               <div className="flex-1 min-w-[200px]">
                 {item.lineKind === 'service' && item.serviceMode !== 'custom' && (
-                  <select
+                  <SearchableCatalogPicker
                     value={catalogSelectValue(item)}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === '__custom__') {
-                        setItemFields(i, {
-                          serviceMode: 'custom',
-                          catalog_service_id: null,
-                          service_name: '',
-                          unit_price: 0,
-                        });
-                        return;
-                      }
-                      if (!v) {
-                        setItemFields(i, {
-                          serviceMode: 'catalog',
-                          catalog_service_id: null,
-                          service_name: '',
-                          unit_price: 0,
-                        });
-                        return;
-                      }
-                      const s = services.find((x) => String(x.id) === String(v));
-                      setItemFields(i, {
-                        serviceMode: 'catalog',
-                        catalog_service_id: s?.id ?? null,
-                        service_name: s?.name || '',
-                        unit_price: s ? Number(s.price) || 0 : 0,
-                      });
-                    }}
-                    className="w-full border rounded-lg px-3 py-2"
-                  >
-                    <option value="">Select service</option>
-                    {servicesByCategory.map(([category, list]) => (
-                      <optgroup key={category} label={category}>
-                        {list.map((s) => (
-                          <option key={s.id} value={String(s.id)}>
-                            {s.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                    <option value="__custom__">Custom / combo…</option>
-                  </select>
+                    onChange={(v) => onServiceCatalogSelect(i, v)}
+                    options={servicePickerOptions}
+                    emptyLabel="Search service…"
+                    extraFooterOptions={[{ value: '__custom__', label: 'Custom / combo…' }]}
+                  />
                 )}
                 {item.lineKind === 'service' && item.serviceMode === 'custom' && (
                   <div className="space-y-1 w-full">
@@ -755,19 +792,13 @@ export default function NewInvoice() {
                   </div>
                 )}
                 {item.lineKind === 'product' && item.productMode !== 'custom' && (
-                  <select
+                  <SearchableCatalogPicker
                     value={productCatalogSelectValue(item)}
-                    onChange={(e) => onProductSelect(i, e.target.value)}
-                    className="w-full border rounded-lg px-3 py-2"
-                  >
-                    <option value="">Select product</option>
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                    <option value="__custom__">Custom item…</option>
-                  </select>
+                    onChange={(v) => onProductSelect(i, v)}
+                    options={productPickerOptions}
+                    emptyLabel="Search product…"
+                    extraFooterOptions={[{ value: '__custom__', label: 'Custom item…' }]}
+                  />
                 )}
                 {item.lineKind === 'product' && item.productMode === 'custom' && (
                   <div className="space-y-1 w-full">
@@ -789,18 +820,12 @@ export default function NewInvoice() {
                   </div>
                 )}
                 {item.lineKind === 'membership' && (
-                  <select
+                  <SearchableCatalogPicker
                     value={item.membership_plan_id != null && item.membership_plan_id !== '' ? String(item.membership_plan_id) : ''}
-                    onChange={(e) => onMembershipSelect(i, e.target.value)}
-                    className="w-full border rounded-lg px-3 py-2"
-                  >
-                    <option value="">Select membership plan</option>
-                    {membershipPlans.map((pl) => (
-                      <option key={pl.id} value={pl.id}>
-                        {pl.name}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(v) => onMembershipSelect(i, v)}
+                    options={membershipPickerOptions}
+                    emptyLabel="Search membership plan…"
+                  />
                 )}
                 {item.lineKind === 'package' && (
                   <div className="space-y-1 w-full">
@@ -834,10 +859,13 @@ export default function NewInvoice() {
                 className="w-28 border rounded px-2 py-2"
                 title="Price"
               />
-              <select value={item.staff_id || ''} onChange={(e) => update(i, 'staff_id', e.target.value)} className="w-40 border rounded px-2 py-2 text-sm" title="Staff">
-                <option value="">Staff *</option>
-                {staff.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <SearchableCatalogPicker
+                className="w-40 min-w-[10rem]"
+                value={item.staff_id ? String(item.staff_id) : ''}
+                onChange={(v) => update(i, 'staff_id', v)}
+                options={staffPickerOptions}
+                emptyLabel="Staff *"
+              />
               <button type="button" onClick={() => removeRow(i)} className="p-2 text-red-500 hover:bg-red-50 rounded" title="Remove line">
                 <Trash2 size={18} />
               </button>
@@ -936,11 +964,25 @@ export default function NewInvoice() {
         </div>
         <div className="border-t border-slate-200 pt-5 mb-8">
           <p className="text-sm font-semibold text-slate-800 mb-3">Bill summary</p>
+          {isMembershipBundleSale && (
+            <p className="text-sm text-slate-600 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 mb-3">
+              <strong className="text-emerald-900">Membership + services on one bill:</strong> the customer pays only the membership (plus tax). The service and product line amounts on this bill are <strong>deducted from the new membership balance</strong> when the sale is saved — they are not collected again in cash.
+            </p>
+          )}
           <div className="flex flex-col md:flex-row md:justify-end gap-4">
             <div className="w-full md:max-w-md space-y-1.5 text-sm rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex justify-between text-slate-700"><span>Subtotal (₹)</span><span className="tabular-nums font-medium">{formatINR(rawSubtotal)}</span></div>
-              <div className="flex justify-between text-slate-600 text-xs"><span>Total (₹)</span><span className="tabular-nums">{formatINR(rawSubtotal)}</span></div>
-              <div className="flex justify-between text-slate-700"><span>Taxable amount (₹)</span><span className="tabular-nums font-medium">{formatINR(rawSubtotal)}</span></div>
+              {isMembershipBundleSale ? (
+                <>
+                  <div className="flex justify-between text-slate-600 text-xs"><span>Line items total — reference (₹)</span><span className="tabular-nums">{formatINR(rawSubtotal)}</span></div>
+                  <div className="flex justify-between text-slate-700"><span>Taxable amount — membership only (₹)</span><span className="tabular-nums font-medium">{formatINR(taxableBase)}</span></div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between text-slate-700"><span>Subtotal (₹)</span><span className="tabular-nums font-medium">{formatINR(rawSubtotal)}</span></div>
+                  <div className="flex justify-between text-slate-600 text-xs"><span>Total (₹)</span><span className="tabular-nums">{formatINR(rawSubtotal)}</span></div>
+                  <div className="flex justify-between text-slate-700"><span>Taxable amount (₹)</span><span className="tabular-nums font-medium">{formatINR(taxableBase)}</span></div>
+                </>
+              )}
               {(Number(cgstPercent) || 0) > 0 && (
                 <div className="flex justify-between text-slate-600"><span>CGST (₹) @ {Number(cgstPercent)}%</span><span className="tabular-nums">{formatINR(cgstAmountLine)}</span></div>
               )}

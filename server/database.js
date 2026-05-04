@@ -1,5 +1,30 @@
 const { Pool } = require('pg');
 
+/** COUNT/bigint from PostgreSQL may arrive as string or bigint — normalize to a safe integer for JSON. */
+function pgCount(val) {
+  if (val == null || val === '') return 0;
+  if (typeof val === 'bigint') return Number(val);
+  const n = Number(val);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.floor(n));
+}
+
+/**
+ * If a bucket has revenue but the line-count came through as 0 (driver/legacy), treat as at least one sale.
+ */
+function reconcileBucketLineCounts(row) {
+  let s = pgCount(row.service_line_count);
+  let p = pgCount(row.product_line_count);
+  let m = pgCount(row.membership_line_count);
+  const sv = Number(row.service_sales) || 0;
+  const pv = Number(row.product_sales) || 0;
+  const mv = Number(row.membership_sales) || 0;
+  if (sv > 0 && s === 0) s = 1;
+  if (pv > 0 && p === 0) p = 1;
+  if (mv > 0 && m === 0) m = 1;
+  return { serviceLineCount: s, productLineCount: p, membershipLineCount: m };
+}
+
 /** Parse split tender amounts from notes (PAY_SPLIT_JSON:{"upi":1000,"cash":208}). */
 function parsePaymentSplitFromNotes(notes) {
   if (notes == null || typeof notes !== 'string') return null;
@@ -31,6 +56,7 @@ function sqlPaymentMethodAmount(method, tableAlias = '') {
     NULLIF(TRIM(BOTH FROM (regexp_match(COALESCE(${p}notes, '')::text, 'PAY_SPLIT_JSON:\\s*(\\{.*\\})\\s*$'))[1]), ''),
     '{}'
   )::jsonb)->>'${method}'`;
+  const primaryPlainTender = `LOWER(TRIM(COALESCE(${p}payment_method, ''))) IN ('cash','upi','card')`;
   return `(
     CASE
       WHEN COALESCE(${p}notes, '')::text ~ 'PAY_SPLIT_JSON:'
@@ -39,17 +65,41 @@ function sqlPaymentMethodAmount(method, tableAlias = '') {
         COALESCE(NULLIF(${splitExtract}, '')::numeric, 0)
       WHEN LOWER(COALESCE(${p}payment_method, '')) LIKE 'membership%' AND LOWER(TRIM(COALESCE(${p}secondary_payment_method, ''))) = '${method}' THEN
         ${p}total::numeric - COALESCE(${p}amount_from_membership, 0)
-      WHEN ${singleMethodTotal} AND ${p}secondary_payment_method IS NULL THEN ${p}total
+      WHEN ${singleMethodTotal} AND ${p}secondary_payment_method IS NULL AND COALESCE(${p}amount_from_membership, 0) = 0 THEN ${p}total
+      WHEN ${primaryPlainTender}
+           AND COALESCE(${p}amount_from_membership, 0) > 0
+           AND COALESCE(${p}secondary_payment_method, '')::text = ''
+           AND LOWER(COALESCE(${p}payment_method, '')) NOT LIKE 'membership%' THEN
+        CASE WHEN LOWER(TRIM(COALESCE(${p}payment_method, ''))) = '${method}'
+             THEN GREATEST(${p}total::numeric - COALESCE(${p}amount_from_membership, 0), 0)
+             ELSE 0 END
       WHEN LOWER(TRIM(COALESCE(${p}secondary_payment_method, ''))) = '${method}' THEN ${p}total::numeric - COALESCE(${p}amount_from_membership, 0)
       ELSE 0
     END
   )`;
 }
 
+/** Sum of cash + UPI + card actually collected (excludes amount paid from existing membership balance). */
+function sqlCollectedRevenueSum(tableAlias = '') {
+  const c = sqlPaymentMethodAmount('cash', tableAlias);
+  const u = sqlPaymentMethodAmount('upi', tableAlias);
+  const k = sqlPaymentMethodAmount('card', tableAlias);
+  return `(COALESCE(SUM(${c}), 0) + COALESCE(SUM(${u}), 0) + COALESCE(SUM(${k}), 0))`;
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
+
+if (process.env.NODE_ENV === 'production' && process.env.DATABASE_URL) {
+  const u = String(process.env.DATABASE_URL);
+  if (/localhost|127\.0\.0\.1/i.test(u)) {
+    console.warn(
+      '[database] DATABASE_URL points to localhost while NODE_ENV=production. Use your host Postgres URL (e.g. Render Internal DB URL), not a laptop URL. See docs/SAFE_DEPLOY_DATABASE.md'
+    );
+  }
+}
 
 // Use IST (India) for all date/timestamp operations
 pool.on('connect', (client) => {
@@ -233,8 +283,18 @@ async function createAppointment({
 
 async function getInvoices(filters = {}) {
   let query = `
-    SELECT i.*, c.name as customer_name, c.phone as customer_phone
-    FROM invoices i JOIN customers c ON i.customer_id = c.id WHERE 1=1
+    SELECT i.*, c.name as customer_name, c.phone as customer_phone,
+      COALESCE(
+        (SELECT string_agg(DISTINCT s.name, ', ')
+         FROM invoice_items ii
+         INNER JOIN staff s ON s.id = ii.staff_id
+         WHERE ii.invoice_id = i.id),
+        hs.name
+      ) AS staff_names
+    FROM invoices i
+    JOIN customers c ON i.customer_id = c.id
+    LEFT JOIN staff hs ON hs.id = i.staff_id
+    WHERE 1=1
   `;
   const params = [];
   let idx = 1;
@@ -282,6 +342,50 @@ async function getNextInvoiceNumber() {
   return `INV-${String(num + 1).padStart(3, '0')}`;
 }
 
+const MEMBERSHIP_BUNDLE_NOTE =
+  'Membership package: customer pays for the plan only; service/product line amounts are deducted from the new membership balance.';
+
+function isInvoiceItemMembershipLine(item) {
+  const raw = item?.membership_plan_id;
+  if (raw != null && raw !== '' && Number.isFinite(Number(raw)) && Number(raw) > 0) return true;
+  const name = String(item?.service_name || '').trim().toLowerCase();
+  return name.startsWith('[membership]');
+}
+
+function lineItemTotalForTax(item) {
+  const u = Number(item.unit_price);
+  const q = Number(item.quantity) || 1;
+  const t = (Number.isFinite(u) ? u : 0) * (Number.isFinite(q) && q > 0 ? q : 1);
+  return Number.isFinite(t) ? t : 0;
+}
+
+/** New membership on the same invoice as services/products: charge only membership lines; other lines are included in the package. */
+function isMembershipBundleInvoiceItems(items) {
+  if (!Array.isArray(items) || items.length === 0) return false;
+  let mem = 0;
+  let other = 0;
+  for (const i of items) {
+    const t = lineItemTotalForTax(i);
+    if (isInvoiceItemMembershipLine(i)) mem += t;
+    else other += t;
+  }
+  return mem > 0 && other > 0;
+}
+
+function getInvoiceTaxableSubtotal(items) {
+  const full = items.reduce((s, i) => s + lineItemTotalForTax(i), 0);
+  if (!isMembershipBundleInvoiceItems(items)) return full;
+  return items.filter(isInvoiceItemMembershipLine).reduce((s, i) => s + lineItemTotalForTax(i), 0);
+}
+
+/** Sum of non-membership line amounts (used to cut from the new membership wallet on bundle sales). */
+function getNonMembershipLinesTotal(items) {
+  if (!Array.isArray(items)) return 0;
+  return items
+    .filter((i) => !isInvoiceItemMembershipLine(i))
+    .reduce((s, i) => s + lineItemTotalForTax(i), 0);
+}
+
 async function createInvoice({
   customerId,
   items,
@@ -298,7 +402,17 @@ async function createInvoice({
   staffId,
 }) {
   const invoiceNumber = await getNextInvoiceNumber();
-  const subtotal = items.reduce((s, i) => s + Number(i.unit_price) * (i.quantity || 1), 0);
+  const subtotal = getInvoiceTaxableSubtotal(items);
+  const bundle = isMembershipBundleInvoiceItems(items);
+  let finalNotes = notes;
+  if (bundle) {
+    const n = notes && String(notes).trim();
+    if (!n || !n.includes('Membership package:')) {
+      finalNotes = n ? `${n}\n${MEMBERSHIP_BUNDLE_NOTE}` : MEMBERSHIP_BUNDLE_NOTE;
+    } else {
+      finalNotes = notes;
+    }
+  }
 
   const cGst = cgstPercent != null && cgstPercent !== '' ? Number(cgstPercent) : null;
   const sGst = sgstPercent != null && sgstPercent !== '' ? Number(sgstPercent) : null;
@@ -346,7 +460,7 @@ async function createInvoice({
       discountAmount,
       total,
       appointmentId || null,
-      notes || null,
+      finalNotes || null,
       staffId || null,
       hasComponentRates ? cgstP : null,
       hasComponentRates ? sgstP : null,
@@ -419,7 +533,7 @@ async function ensureDefaultAdmin() {
 
 async function getDailySales(days = 30) {
   const res = await pool.query(
-    `SELECT DATE(paid_at) as date, SUM(total)::numeric as revenue
+    `SELECT DATE(paid_at) as date, ${sqlCollectedRevenueSum()}::numeric as revenue
      FROM invoices
      WHERE status = 'paid' AND paid_at >= CURRENT_DATE - INTERVAL '1 day' * $1
      GROUP BY DATE(paid_at)
@@ -431,7 +545,7 @@ async function getDailySales(days = 30) {
 
 async function getMonthlySales(months = 12) {
   const res = await pool.query(
-    `SELECT TO_CHAR(paid_at, 'YYYY-MM') as month, SUM(total)::numeric as revenue
+    `SELECT TO_CHAR(paid_at, 'YYYY-MM') as month, ${sqlCollectedRevenueSum()}::numeric as revenue
      FROM invoices
      WHERE status = 'paid' AND paid_at >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month' * $1
      GROUP BY TO_CHAR(paid_at, 'YYYY-MM')
@@ -487,36 +601,43 @@ async function getMonthlySalesByMethod(months = 12) {
  * Daily report for a specific date: revenue by payment method.
  * Uses IST (Asia/Kolkata) for date matching. Expenses added in API.
  * Returns: { date, cash, upi, card, membership, revenue }
+ * revenue = cash + upi + card collected (not invoice totals; excludes wallet redemption).
+ * membership = sum amount_from_membership (balance applied — uses; new plans sold as invoice lines are separate).
  */
 async function getDailyReport(dateStr) {
   const date = dateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const res = await pool.query(
     `SELECT
-       COALESCE(SUM(${sqlPaymentMethodAmount('cash')}), 0)::numeric as cash,
-       COALESCE(SUM(${sqlPaymentMethodAmount('upi')}), 0)::numeric as upi,
-       COALESCE(SUM(${sqlPaymentMethodAmount('card')}), 0)::numeric as card,
-       COALESCE(SUM(COALESCE(amount_from_membership, 0)), 0)::numeric as membership,
-       COALESCE(SUM(total), 0)::numeric as revenue
-     FROM invoices
-     WHERE status = 'paid' AND DATE(paid_at) = $1::date`,
+       COALESCE(SUM(${sqlPaymentMethodAmount('cash', 'i')}), 0)::numeric as cash,
+       COALESCE(SUM(${sqlPaymentMethodAmount('upi', 'i')}), 0)::numeric as upi,
+       COALESCE(SUM(${sqlPaymentMethodAmount('card', 'i')}), 0)::numeric as card,
+       COALESCE(SUM(COALESCE(i.amount_from_membership, 0)), 0)::numeric as membership,
+       COUNT(*) FILTER (WHERE COALESCE(i.amount_from_membership, 0) > 0)::int AS membership_use_count
+     FROM invoices i
+     WHERE i.status = 'paid' AND COALESCE(i.paid_at::date, i.invoice_date::date) = $1::date`,
     [date]
   );
   const row = res.rows[0] || {};
+  const cash = Number(row.cash || 0);
+  const upi = Number(row.upi || 0);
+  const card = Number(row.card || 0);
   return {
     date,
-    cash: Number(row.cash || 0),
-    upi: Number(row.upi || 0),
-    card: Number(row.card || 0),
+    cash,
+    upi,
+    card,
     membership: Number(row.membership || 0),
-    revenue: Number(row.revenue || 0),
+    membershipUseCount: Number(row.membership_use_count) || 0,
+    revenue: cash + upi + card,
   };
 }
 
 /**
- * Daily reports for last N days: each day's revenue by method + expenses + net.
+ * Daily reports for last N days: each day's collected revenue by method + expenses + net.
  * Returns array of { date, cash, upi, card, membership, revenue, expenses, net }
- * Includes all days in range (zeros for days with no sales).
+ * revenue = cash + upi + card only (excludes amount_from_membership wallet redemption).
+ * membership = wallet applied that day (uses), for reporting separate from collected cash.
  */
 async function getDailyReports(days = 14) {
   const revRes = await pool.query(
@@ -525,11 +646,12 @@ async function getDailyReports(days = 14) {
        COALESCE(SUM(${sqlPaymentMethodAmount('upi', 'i')}), 0)::numeric as upi,
        COALESCE(SUM(${sqlPaymentMethodAmount('card', 'i')}), 0)::numeric as card,
        COALESCE(SUM(COALESCE(i.amount_from_membership, 0)), 0)::numeric as membership,
-       COALESCE(SUM(i.total), 0)::numeric as revenue
+       COUNT(*) FILTER (WHERE i.id IS NOT NULL AND COALESCE(i.amount_from_membership, 0) > 0)::int AS membership_use_count
      FROM (
        SELECT generate_series(CURRENT_DATE - ($1 || ' days')::interval, CURRENT_DATE, '1 day'::interval)::date as d
      ) dates
-     LEFT JOIN invoices i ON DATE(i.paid_at) = dates.d AND i.status = 'paid'
+     LEFT JOIN invoices i
+       ON COALESCE(i.paid_at::date, i.invoice_date::date) = dates.d AND i.status = 'paid'
      GROUP BY d
      ORDER BY d DESC`,
     [days]
@@ -543,7 +665,8 @@ async function getDailyReports(days = 14) {
   );
   const expMap = Object.fromEntries(expRes.rows.map((r) => [r.date, Number(r.expenses || 0)]));
   return revRes.rows.map((r) => {
-    const revenue = Number(r.cash || 0) + Number(r.upi || 0) + Number(r.card || 0) + Number(r.membership || 0);
+    const revenue =
+      Number(r.cash || 0) + Number(r.upi || 0) + Number(r.card || 0);
     const expenses = expMap[r.date] ?? 0;
     return {
       date: r.date,
@@ -551,11 +674,166 @@ async function getDailyReports(days = 14) {
       upi: Number(r.upi || 0),
       card: Number(r.card || 0),
       membership: Number(r.membership || 0),
+      membershipUseCount: Number(r.membership_use_count) || 0,
       revenue,
       expenses,
       net: Math.round((revenue - expenses) * 100) / 100,
     };
   });
+}
+
+const SERVICE_LINE_PRED =
+  "COALESCE(ii.service_name, '') NOT LIKE '[Product] %' AND COALESCE(ii.service_name, '') NOT LIKE '[Membership] %'";
+
+/** Same business calendar day as staff sales / CRM: payment day, else invoice date (handles legacy null paid_at). */
+const INVOICE_BUSINESS_DAY = 'COALESCE(i.paid_at::date, i.invoice_date::date)';
+
+/**
+ * Daily “sheet” breakdown for a calendar date (IST via session TZ): paid invoices whose business day = ymd.
+ * Line buckets match reports: service vs [Product] vs [Membership] prefixes.
+ */
+async function getDailySheetBreakdown(ymd) {
+  const re = /^\d{4}-\d{2}-\d{2}$/;
+  if (!ymd || !re.test(ymd)) return null;
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+  const dayClause = `i.status = 'paid' AND ${INVOICE_BUSINESS_DAY} = $1::date`;
+
+  const [linesRes, invRes, collRes, expRes, payRes] = await Promise.all([
+    pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN ${SERVICE_LINE_PRED} THEN ii.quantity::numeric ELSE 0 END), 0)::numeric AS services_qty,
+         COALESCE(SUM(CASE WHEN ${SERVICE_LINE_PRED} THEN ii.total::numeric ELSE 0 END), 0)::numeric AS services_amount,
+         COALESCE(SUM(CASE WHEN ii.service_name LIKE '[Product] %' THEN ii.quantity::numeric ELSE 0 END), 0)::numeric AS products_qty,
+         COALESCE(SUM(CASE WHEN ii.service_name LIKE '[Product] %' THEN ii.total::numeric ELSE 0 END), 0)::numeric AS products_amount,
+         COALESCE(SUM(CASE WHEN ii.service_name LIKE '[Membership] %' THEN ii.quantity::numeric ELSE 0 END), 0)::numeric AS memberships_qty,
+         COALESCE(SUM(CASE WHEN ii.service_name LIKE '[Membership] %' THEN ii.total::numeric ELSE 0 END), 0)::numeric AS memberships_amount
+       FROM invoice_items ii
+       INNER JOIN invoices i ON i.id = ii.invoice_id
+       WHERE ${dayClause}`,
+      [ymd]
+    ),
+    pool.query(
+      `SELECT
+         COALESCE(SUM(COALESCE(discount_amount, 0)), 0)::numeric AS discount_amount,
+         COALESCE(SUM(COALESCE(tax_amount, 0)), 0)::numeric AS tax_amount,
+         COUNT(*) FILTER (WHERE COALESCE(discount_amount, 0) > 0)::int AS discount_invoice_count,
+         COUNT(*) FILTER (WHERE COALESCE(tax_amount, 0) > 0)::int AS tax_invoice_count,
+         COALESCE(SUM(COALESCE(amount_from_membership, 0)), 0)::numeric AS wallet_used,
+         COUNT(*) FILTER (WHERE COALESCE(amount_from_membership, 0) > 0)::int AS prepaid_use_count
+       FROM invoices i
+       WHERE ${dayClause}`,
+      [ymd]
+    ),
+    pool.query(
+      `SELECT ${sqlCollectedRevenueSum('i')}::numeric AS collected_new_money
+       FROM invoices i
+       WHERE ${dayClause}`,
+      [ymd]
+    ),
+    pool.query(
+      `SELECT COALESCE(SUM(amount), 0)::numeric AS expenses FROM expenses WHERE expense_date = $1::date`,
+      [ymd]
+    ),
+    pool.query(
+      `SELECT
+         COALESCE(SUM(${sqlPaymentMethodAmount('cash', 'i')}), 0)::numeric AS cash,
+         COALESCE(SUM(${sqlPaymentMethodAmount('upi', 'i')}), 0)::numeric AS upi,
+         COALESCE(SUM(${sqlPaymentMethodAmount('card', 'i')}), 0)::numeric AS card
+       FROM invoices i
+       WHERE ${dayClause}`,
+      [ymd]
+    ),
+  ]);
+
+  const l = linesRes.rows[0] || {};
+  const inv = invRes.rows[0] || {};
+  const c = collRes.rows[0] || {};
+  const ex = expRes.rows[0] || {};
+  const pay = payRes.rows[0] || {};
+
+  const servicesAmt = round2(l.services_amount);
+  const productsAmt = round2(l.products_amount);
+  const memAmt = round2(l.memberships_amount);
+  const walletUsed = round2(inv.wallet_used);
+  const prepaidNeg = round2(-Math.abs(Number(inv.wallet_used) || 0));
+  const discAmt = round2(inv.discount_amount);
+  const discNeg = round2(-Math.abs(discAmt));
+  const taxAmt = round2(inv.tax_amount);
+  const collected = round2(c.collected_new_money);
+  const expenses = round2(ex.expenses);
+  const cash = round2(pay.cash);
+  const upi = round2(pay.upi);
+  const card = round2(pay.card);
+
+  const rows = [
+    {
+      key: 'services',
+      label: 'Services',
+      itemCount: round2(l.services_qty),
+      received: servicesAmt,
+      total: servicesAmt,
+    },
+    {
+      key: 'prepaid_services',
+      label: 'Prepaid services',
+      itemCount: Number(inv.prepaid_use_count) || 0,
+      received: prepaidNeg,
+      total: prepaidNeg,
+    },
+    {
+      key: 'products',
+      label: 'Products',
+      itemCount: round2(l.products_qty),
+      received: productsAmt,
+      total: productsAmt,
+    },
+    {
+      key: 'memberships',
+      label: 'Memberships',
+      itemCount: round2(l.memberships_qty),
+      received: memAmt,
+      total: memAmt,
+    },
+    {
+      key: 'discounts',
+      label: 'Discounts',
+      itemCount: Number(inv.discount_invoice_count) || 0,
+      received: discNeg,
+      total: discNeg,
+    },
+    {
+      key: 'taxes',
+      label: 'Taxes',
+      itemCount: Number(inv.tax_invoice_count) || 0,
+      received: taxAmt,
+      total: taxAmt,
+    },
+  ];
+
+  const lineRollup = round2(
+    servicesAmt + productsAmt + memAmt + prepaidNeg + discNeg + taxAmt,
+  );
+
+  return {
+    date: ymd,
+    rows,
+    footer: {
+      collectedNewMoney: collected,
+      /** Cash + UPI + card only; prepaid (wallet) is not included. */
+      totalReceived: collected,
+      expenses,
+      /** New money collected minus day expenses (prepaid still not part of totalReceived). */
+      totalReceivedExcludingExpenses: round2(collected - expenses),
+      netAfterExpenses: round2(collected - expenses),
+      lineRollup,
+      walletUsed,
+      prepaid: walletUsed,
+      cash,
+      upi,
+      card,
+    },
+  };
 }
 
 async function logWhatsApp(toPhone, messageType, status, errorMessage) {
@@ -1156,41 +1434,61 @@ async function getPaidLineItemAggregatesByDateRange(fromDate, toDate, limit = 40
  */
 async function getStaffSalesByDateRange(fromDate, toDate) {
   const staffList = await pool.query('SELECT id, name FROM staff WHERE is_active = TRUE ORDER BY name');
+  /** Line staff, else invoice-level staff (Quick Sales often sets header only). */
   const aggRes = await pool.query(
-    `SELECT ii.staff_id,
-            COALESCE(s.name, '') AS staff_name,
+    `SELECT COALESCE(ii.staff_id, i.staff_id) AS staff_id,
+            COALESCE(
+              NULLIF(TRIM(s.name), ''),
+              CASE WHEN COALESCE(ii.staff_id, i.staff_id) IS NULL THEN 'Unassigned' ELSE 'Unknown' END
+            ) AS staff_name,
             SUM(CASE WHEN ii.service_name LIKE '[Product] %' THEN ii.total::numeric ELSE 0 END) AS product_sales,
             SUM(CASE WHEN ii.service_name LIKE '[Membership] %' THEN ii.total::numeric ELSE 0 END) AS membership_sales,
             SUM(CASE
                   WHEN ii.service_name LIKE '[Product] %' OR ii.service_name LIKE '[Membership] %' THEN 0
                   ELSE COALESCE(ii.total::numeric, 0) END) AS service_sales,
             SUM(ii.total::numeric) AS total_sales,
+            COALESCE(SUM(CASE
+              WHEN COALESCE(ii.service_name, '') NOT LIKE '[Product] %'
+               AND COALESCE(ii.service_name, '') NOT LIKE '[Membership] %'
+              THEN 1 ELSE 0 END), 0)::int AS service_line_count,
+            COALESCE(SUM(CASE WHEN ii.service_name LIKE '[Product] %' THEN 1 ELSE 0 END), 0)::int AS product_line_count,
+            COALESCE(SUM(CASE WHEN ii.service_name LIKE '[Membership] %' THEN 1 ELSE 0 END), 0)::int AS membership_line_count,
             COUNT(*)::int AS line_count
      FROM invoice_items ii
      INNER JOIN invoices i ON i.id = ii.invoice_id
-     LEFT JOIN staff s ON s.id = ii.staff_id
+     LEFT JOIN staff s ON s.id = COALESCE(ii.staff_id, i.staff_id)
      WHERE ${INVOICE_LINE_IN_RANGE}
-       AND ii.staff_id IS NOT NULL
-     GROUP BY ii.staff_id, s.name`,
+     GROUP BY COALESCE(ii.staff_id, i.staff_id),
+       COALESCE(
+         NULLIF(TRIM(s.name), ''),
+         CASE WHEN COALESCE(ii.staff_id, i.staff_id) IS NULL THEN 'Unassigned' ELSE 'Unknown' END
+       )`,
     [fromDate, toDate]
   );
 
   const byId = new Map(
-    aggRes.rows.map((r) => [
-      Number(r.staff_id),
-      {
-        staffId: Number(r.staff_id),
-        staffName: r.staff_name || 'Staff',
-        productSales: Number(r.product_sales) || 0,
-        membershipSales: Number(r.membership_sales) || 0,
-        serviceSales: Number(r.service_sales) || 0,
-        totalSales: Number(r.total_sales) || 0,
-        lineCount: Number(r.line_count) || 0,
-      },
-    ])
+    aggRes.rows.map((r) => {
+      const sid = r.staff_id == null ? null : Number(r.staff_id);
+      const cnt = reconcileBucketLineCounts(r);
+      return [
+        sid,
+        {
+          staffId: sid,
+          staffName: r.staff_name || 'Staff',
+          productSales: Number(r.product_sales) || 0,
+          membershipSales: Number(r.membership_sales) || 0,
+          serviceSales: Number(r.service_sales) || 0,
+          totalSales: Number(r.total_sales) || 0,
+          lineCount: pgCount(r.line_count),
+          serviceLineCount: cnt.serviceLineCount,
+          productLineCount: cnt.productLineCount,
+          membershipLineCount: cnt.membershipLineCount,
+        },
+      ];
+    })
   );
 
-  return staffList.rows.map((row) => {
+  const out = staffList.rows.map((row) => {
     const a = byId.get(row.id);
     if (a) return { ...a, staffName: row.name || a.staffName };
     return {
@@ -1201,8 +1499,94 @@ async function getStaffSalesByDateRange(fromDate, toDate) {
       serviceSales: 0,
       totalSales: 0,
       lineCount: 0,
+      serviceLineCount: 0,
+      productLineCount: 0,
+      membershipLineCount: 0,
     };
   });
+
+  const unassigned = byId.get(null);
+  if (unassigned && (unassigned.totalSales > 0 || unassigned.lineCount > 0)) {
+    out.push({
+      ...unassigned,
+      staffName: 'Unassigned',
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Per calendar day, per staff (or Unassigned), attributed line sales.
+ * Business date = COALESCE(paid_at::date, invoice_date). Buckets match getStaffSalesByDateRange.
+ */
+async function getStaffDailySalesByDateRange(fromDate, toDate) {
+  const res = await pool.query(
+    `SELECT
+       TO_CHAR(COALESCE(i.paid_at::date, i.invoice_date), 'YYYY-MM-DD') AS date,
+       COALESCE(ii.staff_id, i.staff_id) AS staff_id,
+       COALESCE(
+         NULLIF(TRIM(s.name), ''),
+         CASE WHEN COALESCE(ii.staff_id, i.staff_id) IS NULL THEN 'Unassigned' ELSE 'Unknown' END
+       ) AS staff_name,
+       SUM(CASE WHEN ii.service_name LIKE '[Product] %' THEN ii.total::numeric ELSE 0 END) AS product_sales,
+       SUM(CASE WHEN ii.service_name LIKE '[Membership] %' THEN ii.total::numeric ELSE 0 END) AS membership_sales,
+       SUM(CASE
+             WHEN ii.service_name LIKE '[Product] %' OR ii.service_name LIKE '[Membership] %' THEN 0
+             ELSE COALESCE(ii.total::numeric, 0) END) AS service_sales,
+       SUM(ii.total::numeric) AS total_sales,
+       COALESCE(SUM(CASE
+         WHEN COALESCE(ii.service_name, '') NOT LIKE '[Product] %'
+          AND COALESCE(ii.service_name, '') NOT LIKE '[Membership] %'
+         THEN 1 ELSE 0 END), 0)::int AS service_line_count,
+       COALESCE(SUM(CASE WHEN ii.service_name LIKE '[Product] %' THEN 1 ELSE 0 END), 0)::int AS product_line_count,
+       COALESCE(SUM(CASE WHEN ii.service_name LIKE '[Membership] %' THEN 1 ELSE 0 END), 0)::int AS membership_line_count,
+       COUNT(*)::int AS line_count
+     FROM invoice_items ii
+     INNER JOIN invoices i ON i.id = ii.invoice_id
+     LEFT JOIN staff s ON s.id = COALESCE(ii.staff_id, i.staff_id)
+     WHERE ${INVOICE_LINE_IN_RANGE}
+     GROUP BY COALESCE(i.paid_at::date, i.invoice_date), COALESCE(ii.staff_id, i.staff_id),
+       COALESCE(
+         NULLIF(TRIM(s.name), ''),
+         CASE WHEN COALESCE(ii.staff_id, i.staff_id) IS NULL THEN 'Unassigned' ELSE 'Unknown' END
+       )
+     ORDER BY COALESCE(i.paid_at::date, i.invoice_date) DESC,
+       COALESCE(
+         NULLIF(TRIM(s.name), ''),
+         CASE WHEN COALESCE(ii.staff_id, i.staff_id) IS NULL THEN 'Unassigned' ELSE 'Unknown' END
+       )`,
+    [fromDate, toDate]
+  );
+
+  return res.rows.map((r) => {
+    const cnt = reconcileBucketLineCounts(r);
+    return {
+      date: normalizeSqlYmd(r.date),
+      staffId: r.staff_id == null ? null : Number(r.staff_id),
+      staffName: r.staff_name || 'Staff',
+      serviceSales: Number(r.service_sales) || 0,
+      productSales: Number(r.product_sales) || 0,
+      membershipSales: Number(r.membership_sales) || 0,
+      totalSales: Number(r.total_sales) || 0,
+      lineCount: pgCount(r.line_count),
+      serviceLineCount: cnt.serviceLineCount,
+      productLineCount: cnt.productLineCount,
+      membershipLineCount: cnt.membershipLineCount,
+    };
+  });
+}
+
+/** node-pg may return DATE as string or Date — always YYYY-MM-DD (IST calendar for Date objects). */
+function normalizeSqlYmd(val) {
+  if (val == null || val === '') return '';
+  if (typeof val === 'string') return val.slice(0, 10);
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    return val.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  }
+  const s = String(val);
+  const m = s.match(/(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : s.slice(0, 10);
 }
 
 async function getStaffAttendanceSummaryByDateRange(fromDate, toDate) {
@@ -1238,10 +1622,12 @@ module.exports = {
   getDailySales,
   getDailyReport,
   getDailyReports,
+  getDailySheetBreakdown,
   getPaidInvoiceLineItemAggregates,
   getPaidLineItemAggregatesByDateRange,
   getLineItemRevenueTotalsByDateRange,
   getStaffSalesByDateRange,
+  getStaffDailySalesByDateRange,
   getStaffAttendanceSummaryByDateRange,
   getMonthlySales,
   getDailySalesByMethod,
@@ -1267,6 +1653,9 @@ module.exports = {
   getMembershipByIdAndCustomerAllowZeroBalance,
   repairMembershipBalanceIfNeeded,
   getLatestMembershipForCustomer,
+  isInvoiceItemMembershipLine,
+  isMembershipBundleInvoiceItems,
+  getNonMembershipLinesTotal,
   getClientAnalytics,
   getClientInsightsSummary,
   lastDayOfMonthYmd,

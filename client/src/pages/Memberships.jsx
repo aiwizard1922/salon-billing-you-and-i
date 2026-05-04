@@ -1,9 +1,32 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { formatINR } from '../utils/formatCurrency';
 import { Gift, Plus, Users, ArrowUpCircle, Wallet, Search } from 'lucide-react';
 import { istDateStr } from '../utils/ist';
+import { SearchableCatalogPicker } from '../components/SearchableCatalogPicker';
 
 const API = '/api';
+
+/** Remaining wallet balance; use DB remaining_balance when present (including 0), not initial/plan fallbacks. */
+function membershipBalanceRupees(a) {
+  const rawRem = a.remaining_balance;
+  if (rawRem !== undefined && rawRem !== null && rawRem !== '') {
+    const n = Number(rawRem);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const rawIni = a.initial_balance;
+  if (rawIni !== undefined && rawIni !== null && rawIni !== '') {
+    const n = Number(rawIni);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return Number(a.plan_price ?? 0) || 0;
+}
+
+function membershipUsesDisplay(a) {
+  const u = a.usage_count;
+  if (u === undefined || u === null || u === '') return 0;
+  const n = Number(u);
+  return Number.isFinite(n) ? n : 0;
+}
 
 export default function Memberships() {
   const [plans, setPlans] = useState([]);
@@ -21,7 +44,8 @@ export default function Memberships() {
   const [topUpAmount, setTopUpAmount] = useState('');
   const [search, setSearch] = useState('');
 
-  const load = () => {
+  const load = useCallback((silent = false) => {
+    if (!silent) setLoading(true);
     Promise.all([
       fetch(`${API}/membership-plans?active=false`).then((r) => r.json()),
       fetch(`${API}/customers`).then((r) => r.json()),
@@ -32,8 +56,10 @@ export default function Memberships() {
         if (cRes.success) setCustomers(cRes.data);
         if (aRes.success) setAssignments(aRes.data);
       })
-      .finally(() => setLoading(false));
-  };
+      .finally(() => {
+        if (!silent) setLoading(false);
+      });
+  }, []);
 
   const upgrade = (id, planId) => {
     const pid = Number(planId);
@@ -86,9 +112,45 @@ export default function Memberships() {
   };
 
   useEffect(() => {
-    setLoading(true);
-    load();
-  }, []);
+    load(false);
+  }, [load]);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible') load(true);
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [load]);
+
+  const assignCustomerOptions = useMemo(
+    () =>
+      customers.map((c) => ({
+        value: String(c.id),
+        label: c.name,
+        sublabel: c.phone ? String(c.phone) : undefined,
+      })),
+    [customers]
+  );
+
+  const assignPlanOptions = useMemo(
+    () =>
+      plans.map((p) => ({
+        value: String(p.id),
+        label: p.name,
+        sublabel: `${formatINR(Number(p.special_price ?? p.price) || 0)} credit`,
+      })),
+    [plans]
+  );
+
+  const upgradePlanPickerOptions = useMemo(() => {
+    if (!actionModal || actionModal.type !== 'upgrade' || !Array.isArray(actionModal.plans)) return [];
+    return actionModal.plans.map((p) => ({
+      value: String(p.id),
+      label: p.name,
+      sublabel: `${formatINR(Number(p.special_price ?? p.price) || 0)} credit`,
+    }));
+  }, [actionModal]);
 
   const handlePlanSubmit = (e) => {
     e.preventDefault();
@@ -143,9 +205,7 @@ export default function Memberships() {
       .catch((err) => setAssignError(err.message || 'Request failed'));
   };
 
-  // Same effective balance for display and status - Active when balance > 0, Expired when 0
-  const effectiveBalance = (a) => Number(a.remaining_balance ?? a.initial_balance ?? a.plan_price ?? 0);
-  const isActive = (a) => effectiveBalance(a) > 0;
+  const isActive = (a) => membershipBalanceRupees(a) > 0;
 
   const searchLower = String(search || '').trim().toLowerCase();
   const searchDigits = searchLower.replace(/\D/g, '');
@@ -278,35 +338,21 @@ export default function Memberships() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm text-slate-600 mb-1">Customer *</label>
-                <select
+                <SearchableCatalogPicker
                   value={assignForm.customerId}
-                  onChange={(e) => setAssignForm({ ...assignForm, customerId: e.target.value })}
-                  className="w-full border rounded-lg px-3 py-2"
-                  required
-                >
-                  <option value="">Select customer</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.phone})
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setAssignForm({ ...assignForm, customerId: v })}
+                  options={assignCustomerOptions}
+                  emptyLabel="Search customer…"
+                />
               </div>
               <div>
                 <label className="block text-sm text-slate-600 mb-1">Plan *</label>
-                <select
+                <SearchableCatalogPicker
                   value={assignForm.planId}
-                  onChange={(e) => setAssignForm({ ...assignForm, planId: e.target.value })}
-                  className="w-full border rounded-lg px-3 py-2"
-                  required
-                >
-                  <option value="">Select plan</option>
-                  {plans.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} – {formatINR(p.special_price ?? p.price)} credit
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setAssignForm({ ...assignForm, planId: v })}
+                  options={assignPlanOptions}
+                  emptyLabel="Search plan…"
+                />
               </div>
             </div>
             <div className="mt-3 flex gap-2">
@@ -378,9 +424,9 @@ export default function Memberships() {
                     <td className="py-3 px-4 font-mono text-sm font-medium">{a.customer_phone || `MEM-${a.id}`}</td>
                     <td className="py-3 px-4">{a.customer_name}</td>
                     <td className="py-3 px-4">{a.plan_name}</td>
-                    <td className="py-3 px-4 text-center">{a.usage_count || 0}</td>
+                    <td className="py-3 px-4 text-center">{membershipUsesDisplay(a)}</td>
                     <td className="py-3 px-4 text-right">
-                      {formatINR(effectiveBalance(a))}
+                      {formatINR(membershipBalanceRupees(a))}
                     </td>
                     <td className="py-3 px-4 text-center">
                       <span
@@ -438,16 +484,16 @@ export default function Memberships() {
               <>
                 <h3 className="font-semibold text-slate-800 mb-4">Upgrade Membership</h3>
                 <p className="text-sm text-slate-500 mb-2">Current plan will be replaced. Remaining balance will be added to the new plan.</p>
-                <select
-                  value={upgradePlanId}
-                  onChange={(e) => setUpgradePlanId(e.target.value)}
-                  className="w-full border rounded-lg px-3 py-2 mb-4"
-                >
-                  <option value="">Select plan</option>
-                  {actionModal.plans?.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name} – {formatINR(p.special_price ?? p.price)} credit</option>
-                  ))}
-                </select>
+                {upgradePlanPickerOptions.length > 0 ? (
+                  <div className="mb-4">
+                    <SearchableCatalogPicker
+                      value={upgradePlanId}
+                      onChange={(v) => setUpgradePlanId(v)}
+                      options={upgradePlanPickerOptions}
+                      emptyLabel="Search plan to upgrade to…"
+                    />
+                  </div>
+                ) : null}
                 {(!actionModal.plans || actionModal.plans.length === 0) && (
                   <p className="text-sm text-amber-600 mb-4">No other plans available to upgrade to.</p>
                 )}

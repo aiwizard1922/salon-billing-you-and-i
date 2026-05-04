@@ -1,11 +1,20 @@
+# Dependencies & build
 node_modules/
+server/node_modules/
+dist/
+
+# Secrets & local DB — never commit (prod uses host dashboard env vars, not Git)
 .env
 .env.local
-dist/
+server/.env
+*.pem
+
+# Backups / dumps may contain live data
+backups/
+*.dump
 .DS_Store
 *.log
 *.tgz
-backups/
 
 # Unrelated projects (do not add to salon-billing)
 fs-for-f/
