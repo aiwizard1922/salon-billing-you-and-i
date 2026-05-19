@@ -59,6 +59,24 @@ In **Environment** → **Environment Variables**, add:
 | `BUSINESS_PHONE` | Your phone |
 | `BUSINESS_EMAIL` | Your email |
 
+**Invoice email (Render Free — use Resend, not Gmail SMTP):**
+
+Render **blocks SMTP** on the free web tier. Use [Resend](https://resend.com) (HTTPS API):
+
+| Key | Value |
+|-----|-------|
+| `INVOICE_NOTIFY_EMAIL` | Who gets alerts (e.g. your Gmail inbox) |
+| `RESEND_API_KEY` | From Resend → API Keys |
+| `EMAIL_FROM` | Verified sender, e.g. `You and I Salon <billing@uandisalon.in>` |
+
+1. Resend → **Domains** → add `uandisalon.in` and add the DNS records they show (Hostinger).
+2. After verification, use an address on that domain in `EMAIL_FROM`.
+3. For testing only, Resend allows `onboarding@resend.dev` as sender (limited).
+
+After deploy, open `https://billing.uandisalon.in/api/email/status` — expect `"ready": true`, `"provider": "resend"`.
+
+Optional: `INVOICE_EMAIL_ATTACH_PDF=false` on Free if PDF generation is slow (Puppeteer).
+
 **Optional (WhatsApp):**
 
 | Key | Value |

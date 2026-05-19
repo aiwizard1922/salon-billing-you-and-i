@@ -26,6 +26,28 @@ function getRecipients() {
     .filter(Boolean);
 }
 
+function getResendApiKey() {
+  return trimEnv(process.env.RESEND_API_KEY);
+}
+
+function getFromAddress() {
+  const explicit =
+    trimEnv(process.env.EMAIL_FROM) ||
+    trimEnv(process.env.RESEND_FROM) ||
+    trimEnv(process.env.SMTP_FROM);
+  if (explicit) return explicit;
+
+  const user = trimEnv(process.env.SMTP_USER);
+  if (user) return user;
+
+  const bizEmail = trimEnv(process.env.BUSINESS_EMAIL);
+  if (bizEmail) {
+    const biz = trimEnv(process.env.BUSINESS_NAME) || 'Salon';
+    return `${biz} <${bizEmail}>`;
+  }
+  return '';
+}
+
 function smtpCredentials() {
   const host = trimEnv(process.env.SMTP_HOST);
   let pass = trimEnv(process.env.SMTP_PASS);
@@ -39,10 +61,54 @@ function smtpCredentials() {
   };
 }
 
-function isNotifyReady() {
-  if (getRecipients().length === 0) return false;
+function isSmtpReady() {
   const { host, user, pass } = smtpCredentials();
   return !!(host && user && pass);
+}
+
+function isResendReady() {
+  return !!(getResendApiKey() && getFromAddress());
+}
+
+function getEmailProvider() {
+  if (getResendApiKey()) return 'resend';
+  if (isSmtpReady()) return 'smtp';
+  return null;
+}
+
+function isNotifyReady() {
+  if (getRecipients().length === 0) return false;
+  return isResendReady() || isSmtpReady();
+}
+
+function getNotifyStatus() {
+  const recipients = getRecipients();
+  const resendKey = !!getResendApiKey();
+  const resend = isResendReady();
+  const smtp = isSmtpReady();
+  const ready = recipients.length > 0 && (resend || smtp);
+  let provider = null;
+  if (ready) provider = resend ? 'resend' : 'smtp';
+
+  const missing = [];
+  if (recipients.length === 0) missing.push('INVOICE_NOTIFY_EMAIL');
+  if (!resend && !smtp) {
+    if (resendKey) missing.push('EMAIL_FROM (verified sender, e.g. Salon <billing@yourdomain.com>)');
+    else {
+      missing.push(
+        'RESEND_API_KEY + EMAIL_FROM (Render/production) or SMTP_HOST + SMTP_USER + SMTP_PASS (local)',
+      );
+    }
+  }
+
+  return {
+    ready,
+    provider,
+    recipients,
+    resendConfigured: resendKey,
+    smtpConfigured: smtp,
+    missing,
+  };
 }
 
 function buildTransporter() {
@@ -153,29 +219,11 @@ function buildPdfNoteHtml(inv) {
   return `<p style="margin-top:16px;font-size:13px;color:#64748b">Invoice <strong>${escHtml(inv.invoice_number)}</strong> — detailed tax invoice is attached as PDF.</p>`;
 }
 
-/**
- * Notify admin after an invoice is marked paid (cash/UPI/card/membership/split).
- * Optional PDF attachment matches the printed tax invoice.
- * @returns {{ ok: true } | { ok: false, skipped: true } | { ok: false, error: string }}
- */
-async function sendPaidInvoiceAdminNotify(invoice) {
-  const recipients = getRecipients();
-  if (recipients.length === 0) return { ok: false, skipped: true };
-  const { host, user, pass } = smtpCredentials();
-  if (!host || !user || !pass) {
-    return {
-      ok: false,
-      error:
-        'Missing SMTP settings: set SMTP_HOST, SMTP_USER, and SMTP_PASS in server/.env.',
-    };
-  }
-
+async function buildPaidInvoiceMail(invoice) {
   const biz = process.env.BUSINESS_NAME || 'Salon';
-  const from =
-    process.env.SMTP_FROM || process.env.SMTP_USER || process.env.BUSINESS_EMAIL || 'noreply@localhost';
+  const from = getFromAddress();
   const invNo = invoice.invoice_number || '';
   const subject = `[${biz}] Payment — ${invNo} — ${formatMoney(invoice.total)}`;
-
   const { coreText, thankYou, coreHtml, thankYouHtml } = buildAdminPaidBody(invoice, biz);
 
   const attachPdf = trimEnv(process.env.INVOICE_EMAIL_ATTACH_PDF).toLowerCase() !== 'false';
@@ -207,16 +255,110 @@ async function sendPaidInvoiceAdminNotify(invoice) {
   }
   textOut += `\n\n${thankYou}`;
 
-  const transporter = buildTransporter();
+  return { from, subject, text: textOut, html: htmlOut, attachments };
+}
+
+async function sendViaResend({ from, to, subject, text, html, attachments }) {
+  const apiKey = getResendApiKey();
+  const body = { from, to, subject, text, html };
+  if (attachments.length > 0) {
+    body.attachments = attachments.map((a) => ({
+      filename: a.filename,
+      content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : String(a.content),
+    }));
+  }
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  let data = {};
   try {
-    await transporter.sendMail({
-      from,
-      to: recipients.join(', '),
-      subject,
-      text: textOut,
-      html: htmlOut,
-      attachments,
-    });
+    data = await res.json();
+  } catch (_) {
+    /* ignore */
+  }
+
+  if (!res.ok) {
+    const msg =
+      (typeof data.message === 'string' && data.message) ||
+      (typeof data.error === 'string' && data.error) ||
+      `Resend request failed (HTTP ${res.status})`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+async function sendViaSmtp({ from, to, subject, text, html, attachments }) {
+  const transporter = buildTransporter();
+  await transporter.sendMail({
+    from,
+    to: to.join(', '),
+    subject,
+    text,
+    html,
+    attachments,
+  });
+}
+
+/**
+ * Notify admin after an invoice is marked paid (cash/UPI/card/membership/split).
+ * Uses Resend HTTPS API when RESEND_API_KEY is set (Render Free); otherwise Gmail SMTP.
+ * @returns {{ ok: true } | { ok: false, skipped: true } | { ok: false, error: string }}
+ */
+async function sendPaidInvoiceAdminNotify(invoice) {
+  const recipients = getRecipients();
+  if (recipients.length === 0) return { ok: false, skipped: true };
+
+  const useResend = !!getResendApiKey();
+  if (useResend && !isResendReady()) {
+    return {
+      ok: false,
+      error:
+        'Resend is partially configured: set RESEND_API_KEY and EMAIL_FROM (verified sender, e.g. You and I Salon <billing@yourdomain.com>).',
+    };
+  }
+  if (!useResend && !isSmtpReady()) {
+    return {
+      ok: false,
+      error:
+        'Missing email settings: set RESEND_API_KEY + EMAIL_FROM (production) or SMTP_HOST, SMTP_USER, SMTP_PASS (local).',
+    };
+  }
+
+  const mail = await buildPaidInvoiceMail(invoice);
+  if (!mail.from) {
+    return {
+      ok: false,
+      error: 'Missing sender: set EMAIL_FROM (Resend) or SMTP_USER / SMTP_FROM.',
+    };
+  }
+
+  try {
+    if (useResend) {
+      await sendViaResend({
+        from: mail.from,
+        to: recipients,
+        subject: mail.subject,
+        text: mail.text,
+        html: mail.html,
+        attachments: mail.attachments,
+      });
+    } else {
+      await sendViaSmtp({
+        from: mail.from,
+        to: recipients,
+        subject: mail.subject,
+        text: mail.text,
+        html: mail.html,
+        attachments: mail.attachments,
+      });
+    }
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -226,5 +368,7 @@ async function sendPaidInvoiceAdminNotify(invoice) {
 module.exports = {
   getRecipients,
   isNotifyReady,
+  getNotifyStatus,
+  getEmailProvider,
   sendPaidInvoiceAdminNotify,
 };

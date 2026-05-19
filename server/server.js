@@ -358,6 +358,7 @@ if (!clientDist) {
         'invoices/:id/pay': 'POST /api/invoices/:id/pay',
         services: 'GET /api/services',
         whatsapp: 'GET /api/whatsapp/status',
+        email: 'GET /api/email/status',
         marketing: 'POST /api/marketing/send',
       },
     });
@@ -1590,6 +1591,10 @@ app.get('/api/whatsapp/status', (req, res) => {
   res.json({ configured: whatsapp.isConfigured() });
 });
 
+app.get('/api/email/status', (req, res) => {
+  res.json(invoiceEmail.getNotifyStatus());
+});
+
 app.get('/api/whatsapp/logs', async (req, res) => {
   try {
     const limit = Math.min(50, parseInt(req.query.limit, 10) || 20);
@@ -1735,11 +1740,11 @@ if (clientDist) {
 
 app.listen(PORT, () => {
   console.log(`Salon Billing API at http://localhost:${PORT}`);
-  const rec = invoiceEmail.getRecipients();
-  if (rec.length > 0) {
-    const ready = invoiceEmail.isNotifyReady();
-    console.log(
-      `[Invoice email] Notify → ${rec.join(', ')} | SMTP ${ready ? 'ready (email when invoice marked paid)' : 'incomplete (set SMTP_HOST, SMTP_USER, SMTP_PASS in server/.env)'}`,
-    );
+  const emailStatus = invoiceEmail.getNotifyStatus();
+  if (emailStatus.recipients.length > 0) {
+    const via = emailStatus.ready
+      ? `${emailStatus.provider} ready (email when invoice marked paid)`
+      : `incomplete (${emailStatus.missing.join('; ')})`;
+    console.log(`[Invoice email] Notify → ${emailStatus.recipients.join(', ')} | ${via}`);
   }
 });
