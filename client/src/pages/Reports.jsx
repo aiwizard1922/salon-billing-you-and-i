@@ -249,13 +249,7 @@ export default function Reports() {
     staffCalByDate.forEach((list, ymd) => {
       out.set(
         ymd,
-        list.reduce(
-          (s, r) =>
-            s +
-            (Number(r.serviceSales) || 0) +
-            (Number(r.productSales) || 0),
-          0,
-        ),
+        list.reduce((s, r) => s + (Number(r.totalSales) || 0), 0),
       );
     });
     return out;

@@ -2,8 +2,48 @@ const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
 const ACCESS_TOKEN = process.env.WA_ACCESS_TOKEN;
 const API_URL = PHONE_ID ? `https://graph.facebook.com/v21.0/${PHONE_ID}/messages` : null;
 
+function trimEnv(val) {
+  if (val == null || val === '') return '';
+  return String(val).trim();
+}
+
 function isConfigured() {
   return !!(PHONE_ID && ACCESS_TOKEN);
+}
+
+function billTemplateName() {
+  return trimEnv(process.env.WA_BILL_TEMPLATE) || 'hello_world';
+}
+
+function paymentTemplateName() {
+  return trimEnv(process.env.WA_PAYMENT_TEMPLATE) || 'payment_successful';
+}
+
+function getWhatsAppStatus() {
+  const configured = isConfigured();
+  const missing = [];
+  if (!trimEnv(PHONE_ID)) missing.push('WA_PHONE_NUMBER_ID');
+  if (!trimEnv(ACCESS_TOKEN)) missing.push('WA_ACCESS_TOKEN');
+  return {
+    configured,
+    billTemplate: billTemplateName(),
+    paymentTemplate: paymentTemplateName(),
+    appointmentTemplate: trimEnv(process.env.WA_APPOINTMENT_TEMPLATE) || null,
+    missing,
+    notes: {
+      invoiceBill: 'Uses template (WA_BILL_TEMPLATE). Default hello_world works for testing.',
+      paymentReceipt:
+        'Uses template (WA_PAYMENT_TEMPLATE). Default payment_successful — must be approved in Meta.',
+      appointment:
+        trimEnv(process.env.WA_APPOINTMENT_TEMPLATE)
+          ? `Uses template ${trimEnv(process.env.WA_APPOINTMENT_TEMPLATE)}.`
+          : 'Uses plain text — only works if customer messaged you in the last 24 hours.',
+      marketing: 'Plain text only — customer must have messaged you in the last 24 hours.',
+    },
+    productionHint: configured
+      ? null
+      : 'Add WA_PHONE_NUMBER_ID and WA_ACCESS_TOKEN on Render (web service), not Postgres.',
+  };
 }
 
 function formatPhone(phone) {
@@ -16,9 +56,9 @@ function formatPhone(phone) {
 async function sendText(toPhone, text) {
   if (!isConfigured() || !API_URL) {
     console.log('[WhatsApp] Not configured. Would send:', text?.slice(0, 50) + '...');
-    return { ok: false };
+    return { ok: false, error: 'WhatsApp not configured' };
   }
-  const to = formatPhone(toPhone); // Must include country code (e.g. 919876543210 for India)
+  const to = formatPhone(toPhone);
   try {
     const res = await fetch(API_URL, {
       method: 'POST',
@@ -32,7 +72,7 @@ async function sendText(toPhone, text) {
       }),
     });
     const data = await res.json();
-    if (!res.ok) return { ok: false, error: data.error?.message };
+    if (!res.ok) return { ok: false, error: data.error?.message || `HTTP ${res.status}` };
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -41,10 +81,10 @@ async function sendText(toPhone, text) {
 
 /**
  * Send a template message. Required for business-initiated conversations
- * (when customer hasn't messaged you in 24h). Text messages only work within session window.
+ * (when customer hasn't messaged you in 24h).
  */
 async function sendTemplate(toPhone, templateName, components = [], languageCode = 'en_US') {
-  if (!isConfigured() || !API_URL) return { ok: false };
+  if (!isConfigured() || !API_URL) return { ok: false, error: 'WhatsApp not configured' };
   const to = formatPhone(toPhone);
   const template = {
     name: templateName,
@@ -64,14 +104,67 @@ async function sendTemplate(toPhone, templateName, components = [], languageCode
       }),
     });
     const data = await res.json();
-    if (!res.ok) return { ok: false, error: data.error?.message };
+    if (!res.ok) return { ok: false, error: data.error?.message || `HTTP ${res.status}` };
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
   }
 }
 
-async function sendAppointmentConfirmation({ customerPhone, customerName, date, time, services, serviceLines, staffName }) {
+/** Body params for Meta payment_successful (Utility › Payments). */
+function paymentSuccessfulComponents(invoiceNumber, lineDescription, amount) {
+  const totalFormatted = `₹${Number(amount || 0).toFixed(2)}`;
+  return [
+    {
+      type: 'body',
+      parameters: [
+        { type: 'text', text: String(invoiceNumber).slice(0, 50) },
+        { type: 'text', text: String(lineDescription).slice(0, 100) },
+        { type: 'text', text: totalFormatted },
+        { type: 'text', text: String(invoiceNumber).slice(0, 50) },
+      ],
+    },
+  ];
+}
+
+async function sendAppointmentConfirmation({
+  customerPhone,
+  customerName,
+  date,
+  time,
+  services,
+  serviceLines,
+  staffName,
+}) {
+  const tpl = trimEnv(process.env.WA_APPOINTMENT_TEMPLATE);
+  let svcSummary;
+  if (Array.isArray(serviceLines) && serviceLines.length > 0) {
+    svcSummary = serviceLines
+      .map((L) => {
+        const n = L.name || 'Service';
+        const st = L.staffName ? ` – ${L.staffName}` : '';
+        return `${n}${st}`;
+      })
+      .join(', ');
+  } else {
+    const svc = Array.isArray(services) ? services.join(', ') : services || 'Service';
+    svcSummary = staffName ? `${svc} (${staffName})` : svc;
+  }
+
+  if (tpl) {
+    return sendTemplate(customerPhone, tpl, [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: (customerName || 'Customer').slice(0, 100) },
+          { type: 'text', text: String(date).slice(0, 50) },
+          { type: 'text', text: String(time).slice(0, 50) },
+          { type: 'text', text: svcSummary.slice(0, 100) },
+        ],
+      },
+    ]);
+  }
+
   let svcBlock;
   if (Array.isArray(serviceLines) && serviceLines.length > 0) {
     svcBlock = serviceLines
@@ -93,18 +186,46 @@ async function sendAppointmentConfirmation({ customerPhone, customerName, date, 
 }
 
 async function sendPaymentReceipt({ customerPhone, customerName, invoiceNumber, amount }) {
-  return sendText(customerPhone, `Thank you for your payment, ${customerName || 'Customer'}!\n\n✅ Invoice: ${invoiceNumber}\n💰 Amount: ₹${Number(amount).toFixed(2)}\n\nThank you for choosing us!`);
+  const templateName = paymentTemplateName();
+  const biz = process.env.BUSINESS_NAME || 'Salon';
+
+  if (templateName === 'payment_successful') {
+    return sendTemplate(
+      customerPhone,
+      'payment_successful',
+      paymentSuccessfulComponents(
+        invoiceNumber,
+        `${biz} – payment from ${customerName || 'Customer'}`.slice(0, 100),
+        amount,
+      ),
+    );
+  }
+
+  if (templateName === 'hello_world') {
+    return sendTemplate(customerPhone, 'hello_world', []);
+  }
+
+  // Custom template name with same 4 body slots as payment_successful
+  return sendTemplate(
+    customerPhone,
+    templateName,
+    paymentSuccessfulComponents(invoiceNumber, `${biz} – payment received`, amount),
+  );
 }
 
 /**
- * Send invoice bill. Uses TEMPLATE message (required for business-initiated - customer hasn't
- * messaged in 24h). Set WA_BILL_TEMPLATE in .env:
- * - hello_world: test template (no params)
- * - invoice_bill: custom "Hi {{1}}, your bill from {{2}}. Invoice: {{3}}. Total: ₹{{4}}"
- * - payment_successful: Meta's Utility › Payments template (4 params: case_code, case_title, payment_amount, order_id)
+ * Send invoice bill. Uses TEMPLATE message (required for business-initiated).
+ * WA_BILL_TEMPLATE: hello_world | payment_successful | invoice_bill | your_approved_name
  */
-async function sendInvoiceBill({ customerPhone, customerName, invoiceNumber, items, total, businessName }) {
-  const templateName = process.env.WA_BILL_TEMPLATE || 'hello_world';
+async function sendInvoiceBill({
+  customerPhone,
+  customerName,
+  invoiceNumber,
+  items,
+  total,
+  businessName,
+}) {
+  const templateName = billTemplateName();
   const biz = businessName || process.env.BUSINESS_NAME || 'Salon';
   const totalFormatted = `₹${Number(total || 0).toFixed(2)}`;
   const serviceSummary = (items || [])
@@ -113,17 +234,11 @@ async function sendInvoiceBill({ customerPhone, customerName, invoiceNumber, ite
     .slice(0, 100) || 'Salon services';
 
   if (templateName === 'payment_successful') {
-    return sendTemplate(customerPhone, 'payment_successful', [
-      {
-        type: 'body',
-        parameters: [
-          { type: 'text', text: String(invoiceNumber).slice(0, 50) },
-          { type: 'text', text: `${biz} – ${serviceSummary}`.slice(0, 100) },
-          { type: 'text', text: totalFormatted },
-          { type: 'text', text: String(invoiceNumber).slice(0, 50) },
-        ],
-      },
-    ]);
+    return sendTemplate(
+      customerPhone,
+      'payment_successful',
+      paymentSuccessfulComponents(invoiceNumber, `${biz} – ${serviceSummary}`, total),
+    );
   }
 
   if (templateName === 'invoice_bill') {
@@ -140,24 +255,36 @@ async function sendInvoiceBill({ customerPhone, customerName, invoiceNumber, ite
     ]);
   }
 
-  // Default: hello_world (no params)
+  if (templateName !== 'hello_world') {
+    return sendTemplate(customerPhone, templateName, [
+      {
+        type: 'body',
+        parameters: [
+          { type: 'text', text: (customerName || 'Customer').slice(0, 100) },
+          { type: 'text', text: biz.slice(0, 100) },
+          { type: 'text', text: String(invoiceNumber).slice(0, 50) },
+          { type: 'text', text: totalFormatted },
+        ],
+      },
+    ]);
+  }
+
   return sendTemplate(customerPhone, 'hello_world', []);
 }
 
 async function sendMembershipExpiryReminder({ customerPhone, customerName, planName, endDate, daysLeft }) {
   return sendText(
     customerPhone,
-    `Hi ${customerName || 'Valued Customer'}!\n\n⏰ Your *${planName || 'membership'}* is expiring in ${daysLeft} days (${endDate}).\n\nRenew or upgrade now to continue enjoying your benefits. Visit us or contact us to renew easily!\n\nWe look forward to serving you. 💇`
+    `Hi ${customerName || 'Valued Customer'}!\n\n⏰ Your *${planName || 'membership'}* is expiring in ${daysLeft} days (${endDate}).\n\nRenew or upgrade now to continue enjoying your benefits. Visit us or contact us to renew easily!\n\nWe look forward to serving you. 💇`,
   );
 }
 
-/** Personalize message: replaces {{name}} with customer name */
 function personalizeMessage(template, customerName) {
   const name = customerName || 'Valued Customer';
   return template.replace(/\{\{name\}\}/gi, name);
 }
 
-/** Send bulk marketing messages. Returns { sent, failed, errors } */
+/** Send bulk marketing messages. Plain text — only within 24h customer session window. */
 async function sendBulkMarketing(customers, messageTemplate, onEach, logFn) {
   const results = { sent: 0, failed: 0, errors: [] };
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -187,7 +314,9 @@ async function sendBulkMarketing(customers, messageTemplate, onEach, logFn) {
 
 module.exports = {
   isConfigured,
+  getWhatsAppStatus,
   sendText,
+  sendTemplate,
   sendAppointmentConfirmation,
   sendPaymentReceipt,
   sendInvoiceBill,

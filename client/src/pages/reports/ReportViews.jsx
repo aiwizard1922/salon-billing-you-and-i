@@ -233,7 +233,8 @@ export function ReportsDailyView({ ctx }) {
         {dailyReports.length === 0 ? (
           <p className="text-slate-500 py-8 text-center text-sm">No data for this period.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-100">
+          <>
+            <div className="overflow-x-auto rounded-lg border border-slate-100">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/90">
@@ -263,6 +264,13 @@ export function ReportsDailyView({ ctx }) {
               </tbody>
             </table>
           </div>
+            <p className="mt-4 text-xs text-slate-600 leading-relaxed">
+              <strong>Revenue</strong> = <strong>cash + UPI + card</strong> collected that day (new money in the drawer).
+              <strong> Member</strong> = amount settled from membership / wallet on invoices. Staff reports use{' '}
+              <strong>line list totals</strong> (full price on each line), so if part of the bill was paid from wallet,
+              staff amounts can add up to <em>more</em> than Revenue—that is expected, not a bug.
+            </p>
+          </>
         )}
       </div>
 
@@ -394,7 +402,9 @@ export function ReportsStaffView({ ctx }) {
       <header>
         <h2 className="text-lg font-semibold text-slate-900">Staff reports</h2>
         <p className="text-sm text-slate-600 mt-1">
-          Performance for the same period as <span className="font-medium text-slate-800">Services and products</span> (use the controls below).
+          Performance for the same period as <span className="font-medium text-slate-800">Services and products</span>{' '}
+          (use the controls below). Staff rupee columns are <strong>line totals</strong>, not bank deposits—see notes on
+          this page and under <strong>Daily sales → End of day</strong> for why they do not add up to Revenue.
         </p>
       </header>
 
@@ -442,8 +452,9 @@ export function ReportsStaffView({ ctx }) {
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
               <h3 className="text-base font-semibold text-slate-900">Staff performance</h3>
               <p className="text-xs text-slate-500 mt-1 mb-4">
-                Bar length = Total (service + product ₹ only). Ties: higher membership sale count. Calendar day cells use the
-                same Total (no membership ₹ in the number).
+                Bar = service + product line <strong>amounts</strong>. Ties: more membership <em>lines</em>. Calendar cells
+                sum <strong>services + products</strong> for the day (membership lines count in <strong># sales</strong> only;
+                membership <strong>₹</strong> is not included in the calendar figure or daily <strong>Total</strong>).
               </p>
               {staffPerfChart.length === 0 ? (
                 <p className="text-slate-500 text-sm py-10 text-center">
@@ -471,13 +482,13 @@ export function ReportsStaffView({ ctx }) {
                                   Membership lines (tiebreak): {formatCount(row.membershipLineCount)}
                                 </p>
                               )}
-                              {row.membership > 0 && <p>Membership ₹: {formatINR(row.membership)}</p>}
+                              {row.membership > 0 && <p>Membership ₹ (line amounts): {formatINR(row.membership)}</p>}
                               <p className="font-medium border-t border-slate-100 pt-1.5 mt-1.5">
-                                Total: {formatINR(row.total)}
+                                Total (bar): {formatINR(row.total)}
                               </p>
                               {row.totalAll > row.total && (
                                 <p className="text-xs text-slate-500">
-                                  Including membership: {formatINR(row.totalAll)}
+                                  All lines incl. membership: {formatINR(row.totalAll)} — list totals, not cash collected.
                                 </p>
                               )}
                             </div>
@@ -520,7 +531,11 @@ export function ReportsStaffView({ ctx }) {
                             </li>
                           </ul>
                           <p className="text-xs text-slate-500 mt-2">
-                            Including membership on attributed lines: {formatINR(tp.totalSales)}
+                            All attributed lines (incl. membership rows): {formatINR(tp.totalSales)} —{' '}
+                            <span className="text-slate-600">
+                              these are <strong>line amounts</strong>, not the same as cash + UPI + card in the daily sheet
+                              when customers use wallet.
+                            </span>
                           </p>
                         </>
                       ) : (
@@ -561,7 +576,7 @@ export function ReportsStaffView({ ctx }) {
                     <th
                       rowSpan={2}
                       className="align-bottom text-right py-3 px-4 font-medium text-slate-700 border-l border-slate-200"
-                      title="Service + product amount (excludes membership)"
+                      title="Sum of line totals (services + products + membership lines). Often larger than Daily Revenue when bills include wallet / membership balance."
                     >
                       Total
                     </th>
@@ -589,8 +604,7 @@ export function ReportsStaffView({ ctx }) {
                       );
                     })
                     .map((row) => {
-                      const sp =
-                        (Number(row.serviceSales) || 0) + (Number(row.productSales) || 0);
+                      const sp = Math.round(Number(row.totalSales || 0) * 100) / 100;
                       return (
                         <tr key={row.staffId} className="border-b border-slate-100 hover:bg-slate-50/80">
                           <td className="py-2.5 px-4 font-medium text-slate-800">{row.staffName}</td>
@@ -621,6 +635,11 @@ export function ReportsStaffView({ ctx }) {
                 </tbody>
               </table>
             </div>
+            <p className="px-5 py-3 text-xs text-slate-600 leading-relaxed border-t border-slate-100 bg-slate-50/40">
+              <strong>Total</strong> here sums <strong>service + product</strong> line amounts for the period. Membership
+              lines still show <strong># sales</strong> and full <strong>Amount</strong> in their column. This table is not
+              the same as the <strong>Daily staff</strong> calendar below (daily view omits membership ₹ from Totals).
+            </p>
           </div>
 
           <div id="reports-daily-staff" className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden scroll-mt-6">
@@ -679,6 +698,14 @@ export function ReportsStaffView({ ctx }) {
                   </div>
                 </div>
 
+                <p className="text-xs text-slate-500 leading-relaxed px-1">
+                  Daily staff view: <strong>Total</strong> and the calendar number are <strong>services + products</strong>{' '}
+                  only. Membership is tracked with <strong># sales</strong> (line count); membership <strong>Amount</strong> is
+                  not scored here (shows ₹0). That differs from <strong>Daily sales → Revenue</strong> (all tender) and from
+                  the <strong>Staff sales (period)</strong> table above, which still shows full line amounts including
+                  membership ₹.
+                </p>
+
                 <div className="rounded-xl border border-slate-200 overflow-hidden">
                   <div className="px-4 py-3 bg-amber-50/50 border-b border-amber-100/80">
                     <p className="text-sm font-semibold text-slate-900">
@@ -720,12 +747,12 @@ export function ReportsStaffView({ ctx }) {
                               Membership
                             </th>
                             <th
-                              rowSpan={2}
-                              className="align-bottom text-right py-2.5 px-4 font-medium text-slate-700 border-l border-slate-200"
-                              title="Service + product amount (excludes membership)"
-                            >
-                              Total
-                            </th>
+                      rowSpan={2}
+                      className="align-bottom text-right py-2.5 px-4 font-medium text-slate-700 border-l border-slate-200"
+                      title="Services + products line amounts for this day (membership ₹ excluded). Membership column shows count only for scoring; amount is ₹0 in daily view."
+                    >
+                      Total
+                    </th>
                           </tr>
                           <tr className="border-b border-slate-200 bg-white text-xs font-normal text-slate-600">
                             <th className="text-right py-2 px-2 border-l border-slate-200"># sales</th>
@@ -738,8 +765,7 @@ export function ReportsStaffView({ ctx }) {
                         </thead>
                         <tbody>
                           {staffCalSelectedRows.map((row, idx) => {
-                            const sp =
-                              (Number(row.serviceSales) || 0) + (Number(row.productSales) || 0);
+                            const sp = Math.round(Number(row.totalSales || 0) * 100) / 100;
                             return (
                               <tr
                                 key={`${staffCalSelectedYmd}-${row.staffId ?? 'u'}-${row.staffName}-${idx}`}

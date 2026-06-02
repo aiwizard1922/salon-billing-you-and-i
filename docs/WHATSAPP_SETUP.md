@@ -117,6 +117,23 @@ WA_ACCESS_TOKEN=EAABsbCS1iHgBO7...
 
 3. Save the file
 
+### Production (Render)
+
+1. Render Dashboard → **Web Service** `salon-billing-you-and-i` → **Environment**
+2. Add the same keys (copy values from `server/.env` — do not commit tokens to Git):
+
+```
+WA_PHONE_NUMBER_ID=...
+WA_ACCESS_TOKEN=...
+WA_BILL_TEMPLATE=hello_world
+WA_PAYMENT_TEMPLATE=payment_successful
+```
+
+3. Save → redeploy
+4. Open `https://billing.uandisalon.in/api/whatsapp/status` — expect `"configured": true`
+
+**Note:** Temporary Meta tokens expire in 24 hours. For production, create a **permanent** System User token in Meta Business Manager.
+
 ---
 
 ## Step 7: Restart the Server

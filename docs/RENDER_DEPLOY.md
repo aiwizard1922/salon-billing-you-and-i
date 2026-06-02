@@ -77,13 +77,18 @@ After deploy, open `https://billing.uandisalon.in/api/email/status` — expect `
 
 Optional: `INVOICE_EMAIL_ATTACH_PDF=false` on Free if PDF generation is slow (Puppeteer).
 
-**Optional (WhatsApp):**
+**WhatsApp (works on Render Free — HTTPS to Meta):**
 
 | Key | Value |
 |-----|-------|
-| `WA_PHONE_NUMBER_ID` | From Meta Developers |
-| `WA_ACCESS_TOKEN` | From Meta Developers |
-| `WA_BILL_TEMPLATE` | `payment_successful` or `invoice_bill` |
+| `WA_PHONE_NUMBER_ID` | Meta → WhatsApp → API Setup |
+| `WA_ACCESS_TOKEN` | Meta access token (permanent token recommended for prod) |
+| `WA_BILL_TEMPLATE` | `hello_world` (test) or `payment_successful` / `invoice_bill` (approved in Meta) |
+| `WA_PAYMENT_TEMPLATE` | `payment_successful` (default — receipt when invoice marked paid) |
+
+Check: `https://billing.uandisalon.in/api/whatsapp/status` → `"configured": true`
+
+Full setup: **`docs/WHATSAPP_SETUP.md`**
 
 5. Click **Create Web Service**
 

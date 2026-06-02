@@ -346,10 +346,17 @@ const MEMBERSHIP_BUNDLE_NOTE =
   'Membership package: customer pays for the plan only; service/product line amounts are deducted from the new membership balance.';
 
 function isInvoiceItemMembershipLine(item) {
+  const lk = String(item?.lineKind || '').toLowerCase();
+  if (lk === 'membership') return true;
   const raw = item?.membership_plan_id;
   if (raw != null && raw !== '' && Number.isFinite(Number(raw)) && Number(raw) > 0) return true;
   const name = String(item?.service_name || '').trim().toLowerCase();
   return name.startsWith('[membership]');
+}
+
+/** Same idea as client resolvedLineLabel: line counts for tax/bundle only if it has a description on the invoice. */
+function lineHasInvoiceDescription(item) {
+  return String(item?.service_name || '').trim().length > 0;
 }
 
 function lineItemTotalForTax(item) {
@@ -365,6 +372,7 @@ function isMembershipBundleInvoiceItems(items) {
   let mem = 0;
   let other = 0;
   for (const i of items) {
+    if (!lineHasInvoiceDescription(i)) continue;
     const t = lineItemTotalForTax(i);
     if (isInvoiceItemMembershipLine(i)) mem += t;
     else other += t;
@@ -375,14 +383,16 @@ function isMembershipBundleInvoiceItems(items) {
 function getInvoiceTaxableSubtotal(items) {
   const full = items.reduce((s, i) => s + lineItemTotalForTax(i), 0);
   if (!isMembershipBundleInvoiceItems(items)) return full;
-  return items.filter(isInvoiceItemMembershipLine).reduce((s, i) => s + lineItemTotalForTax(i), 0);
+  return items
+    .filter((i) => lineHasInvoiceDescription(i) && isInvoiceItemMembershipLine(i))
+    .reduce((s, i) => s + lineItemTotalForTax(i), 0);
 }
 
 /** Sum of non-membership line amounts (used to cut from the new membership wallet on bundle sales). */
 function getNonMembershipLinesTotal(items) {
   if (!Array.isArray(items)) return 0;
   return items
-    .filter((i) => !isInvoiceItemMembershipLine(i))
+    .filter((i) => lineHasInvoiceDescription(i) && !isInvoiceItemMembershipLine(i))
     .reduce((s, i) => s + lineItemTotalForTax(i), 0);
 }
 
@@ -432,17 +442,17 @@ async function createInvoice({
     effectiveTaxPercent = cgstP + sgstP + igstP + serviceP;
   }
 
-  const taxAmount = (subtotal * effectiveTaxPercent) / 100;
-  const totalBeforeDiscount = subtotal + taxAmount;
+  const taxAmount = Math.round(((subtotal * effectiveTaxPercent) / 100) * 100) / 100;
+  const totalBeforeDiscount = Math.round((subtotal + taxAmount) * 100) / 100;
   let discountPct = 0;
   let discountAmount = 0;
   if (discountType === 'fixed') {
     const fixed = Math.max(0, Number(discountFixed) || 0);
-    discountAmount = Math.min(fixed, totalBeforeDiscount);
+    discountAmount = Math.round(Math.min(fixed, totalBeforeDiscount) * 100) / 100;
     discountPct = 0;
   } else {
     discountPct = Math.max(0, Math.min(100, Number(discountPercent) || 0));
-    discountAmount = (totalBeforeDiscount * discountPct) / 100;
+    discountAmount = Math.round(((totalBeforeDiscount * discountPct) / 100) * 100) / 100;
   }
   const total = Math.round(Math.max(0, totalBeforeDiscount - discountAmount) * 100) / 100;
 
@@ -1337,9 +1347,9 @@ async function getPaidInvoiceLineItemAggregates(days = 90, limit = 7) {
   };
 }
 
-/** Generated invoices (paid or pending); business date = paid day or invoice date. */
+/** Paid invoices only; business date = paid day or invoice date (matches daily revenue / sheet). */
 const INVOICE_LINE_IN_RANGE = `
-  i.status IN ('paid', 'pending')
+  i.status = 'paid'
   AND COALESCE(i.paid_at::date, i.invoice_date) >= $1::date
   AND COALESCE(i.paid_at::date, i.invoice_date) <= $2::date
 `;
@@ -1347,6 +1357,7 @@ const INVOICE_LINE_IN_RANGE = `
 /**
  * Full-category revenue totals for the date range (not limited to top-N names).
  * Buckets match staff sales: service = neither [Product] nor [Membership]; NULL lines count as service.
+ * Uses paid invoices only (same business day rules as daily revenue).
  */
 async function getLineItemRevenueTotalsByDateRange(fromDate, toDate) {
   const res = await pool.query(
@@ -1519,6 +1530,8 @@ async function getStaffSalesByDateRange(fromDate, toDate) {
 /**
  * Per calendar day, per staff (or Unassigned), attributed line sales.
  * Business date = COALESCE(paid_at::date, invoice_date). Buckets match getStaffSalesByDateRange.
+ * totalSales = services + products only (membership line rupees excluded from performance totals).
+ * membershipLineCount counts membership lines; membershipSales is always 0 here (amounts not used for daily staff).
  */
 async function getStaffDailySalesByDateRange(fromDate, toDate) {
   const res = await pool.query(
@@ -1530,11 +1543,14 @@ async function getStaffDailySalesByDateRange(fromDate, toDate) {
          CASE WHEN COALESCE(ii.staff_id, i.staff_id) IS NULL THEN 'Unassigned' ELSE 'Unknown' END
        ) AS staff_name,
        SUM(CASE WHEN ii.service_name LIKE '[Product] %' THEN ii.total::numeric ELSE 0 END) AS product_sales,
-       SUM(CASE WHEN ii.service_name LIKE '[Membership] %' THEN ii.total::numeric ELSE 0 END) AS membership_sales,
+       0::numeric AS membership_sales,
        SUM(CASE
              WHEN ii.service_name LIKE '[Product] %' OR ii.service_name LIKE '[Membership] %' THEN 0
              ELSE COALESCE(ii.total::numeric, 0) END) AS service_sales,
-       SUM(ii.total::numeric) AS total_sales,
+       SUM(CASE
+             WHEN ii.service_name LIKE '[Membership] %' THEN 0
+             ELSE COALESCE(ii.total::numeric, 0)
+           END) AS total_sales,
        COALESCE(SUM(CASE
          WHEN COALESCE(ii.service_name, '') NOT LIKE '[Product] %'
           AND COALESCE(ii.service_name, '') NOT LIKE '[Membership] %'
