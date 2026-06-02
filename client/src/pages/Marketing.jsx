@@ -11,6 +11,7 @@ export default function Marketing() {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
   const [waConfigured, setWaConfigured] = useState(false);
+  const [waStatus, setWaStatus] = useState(null);
   const [waLogs, setWaLogs] = useState([]);
   const [showLogs, setShowLogs] = useState(false);
 
@@ -21,6 +22,7 @@ export default function Marketing() {
     ])
       .then(([custRes, waRes]) => {
         if (custRes.success) setCustomers(custRes.data);
+        setWaStatus(waRes);
         if (waRes.configured) setWaConfigured(true);
       })
       .catch(() => {})
@@ -89,11 +91,21 @@ export default function Marketing() {
             <p className="font-medium text-amber-800">WhatsApp not configured</p>
             <p className="text-sm text-amber-700 mt-1">
               Add <code className="bg-amber-100 px-1 rounded">WA_PHONE_NUMBER_ID</code> and{' '}
-              <code className="bg-amber-100 px-1 rounded">WA_ACCESS_TOKEN</code> to{' '}
-              <code className="bg-amber-100 px-1 rounded">server/.env</code> from your Meta for
-              Developers console. Messages will be logged but not sent until configured.
+              <code className="bg-amber-100 px-1 rounded">WA_ACCESS_TOKEN</code> in{' '}
+              <code className="bg-amber-100 px-1 rounded">server/.env</code> (local) or Render →
+              Environment (production). See <code className="bg-amber-100 px-1 rounded">docs/WHATSAPP_SETUP.md</code>.
             </p>
           </div>
+        </div>
+      )}
+
+      {waConfigured && waStatus?.notes?.marketing && (
+        <div className="mb-6 p-4 bg-sky-50 border border-sky-200 rounded-xl">
+          <p className="text-sm text-sky-900">
+            <strong>Note:</strong> {waStatus.notes.marketing} Use invoice templates for new bills;
+            approve <code className="bg-sky-100 px-1 rounded">payment_successful</code> in Meta for
+            payment receipts.
+          </p>
         </div>
       )}
 

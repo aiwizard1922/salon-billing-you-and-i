@@ -171,6 +171,31 @@ export default function NewInvoice() {
     });
   };
 
+  const addConsumedProduct = (i) =>
+    setItems((prev) => {
+      const next = [...prev];
+      const list = next[i].consumedProducts || [];
+      next[i] = { ...next[i], consumedProducts: [...list, { product_id: '', quantity: 1 }] };
+      return next;
+    });
+
+  const updateConsumedProduct = (i, j, patch) =>
+    setItems((prev) => {
+      const next = [...prev];
+      const list = [...(next[i].consumedProducts || [])];
+      list[j] = { ...list[j], ...patch };
+      next[i] = { ...next[i], consumedProducts: list };
+      return next;
+    });
+
+  const removeConsumedProduct = (i, j) =>
+    setItems((prev) => {
+      const next = [...prev];
+      const list = (next[i].consumedProducts || []).filter((_, k) => k !== j);
+      next[i] = { ...next[i], consumedProducts: list };
+      return next;
+    });
+
   const addServiceRow = () => setItems((prev) => [...prev, emptyLine('service')]);
   const addProductRow = () => setItems((prev) => [...prev, emptyLine('product')]);
   const addMembershipRow = () => setItems((prev) => [...prev, emptyLine('membership')]);
@@ -348,13 +373,13 @@ export default function NewInvoice() {
   const sgstAmountLine = (taxableBase * Math.max(0, Number(sgstPercent) || 0)) / 100;
   const igstAmountLine = (taxableBase * Math.max(0, Number(igstPercent) || 0)) / 100;
   const serviceTaxAmountLine = (taxableBase * Math.max(0, Number(serviceTaxPercent) || 0)) / 100;
-  const tax = cgstAmountLine + sgstAmountLine + igstAmountLine + serviceTaxAmountLine;
-  const totalBeforeDiscount = taxableBase + tax;
+  const tax = Math.round((cgstAmountLine + sgstAmountLine + igstAmountLine + serviceTaxAmountLine) * 100) / 100;
+  const totalBeforeDiscount = Math.round((taxableBase + tax) * 100) / 100;
   const discountPctNum = Math.max(0, Math.min(100, Number(discountValue) || 0));
   const discountAmount =
     discountType === 'fixed'
-      ? Math.min(Math.max(0, Number(discountValue) || 0), totalBeforeDiscount)
-      : (totalBeforeDiscount * discountPctNum) / 100;
+      ? Math.round(Math.min(Math.max(0, Number(discountValue) || 0), totalBeforeDiscount) * 100) / 100
+      : Math.round(((totalBeforeDiscount * discountPctNum) / 100) * 100) / 100;
   const total = Math.round(Math.max(0, totalBeforeDiscount - discountAmount) * 100) / 100;
   const displayBalance = activeMembership
     ? (activeMembership.remaining_balance != null ? Number(activeMembership.remaining_balance) : null)
@@ -426,6 +451,15 @@ export default function NewInvoice() {
       discountFixed: discountType === 'fixed' ? Math.max(0, Number(discountValue) || 0) : 0,
       notes: notes || undefined,
       sendWhatsApp,
+      consumedProducts: items.flatMap((i) =>
+        (i.consumedProducts || [])
+          .filter((cp) => cp.product_id && Number(cp.quantity) > 0)
+          .map((cp) => ({
+            productId: Number(cp.product_id),
+            quantity: Number(cp.quantity),
+            serviceName: resolvedLineLabel(i) || null,
+          })),
+      ),
     };
     if (customerMode === 'existing') {
       payload.customerId = Number(customerId);
@@ -869,6 +903,40 @@ export default function NewInvoice() {
               <button type="button" onClick={() => removeRow(i)} className="p-2 text-red-500 hover:bg-red-50 rounded" title="Remove line">
                 <Trash2 size={18} />
               </button>
+              {item.lineKind === 'service' && (
+                <div className="w-full pl-20 mt-1">
+                  {(item.consumedProducts || []).map((cp, j) => (
+                    <div key={j} className="flex flex-wrap items-center gap-2 mb-2">
+                      <span className="text-[11px] text-slate-400 w-24 shrink-0">Product used</span>
+                      <SearchableCatalogPicker
+                        className="min-w-[200px]"
+                        value={cp.product_id ? String(cp.product_id) : ''}
+                        onChange={(v) => updateConsumedProduct(i, j, { product_id: v })}
+                        options={productPickerOptions}
+                        emptyLabel="Search product…"
+                      />
+                      <input
+                        type="number"
+                        min={1}
+                        value={cp.quantity}
+                        onChange={(e) => updateConsumedProduct(i, j, { quantity: e.target.value })}
+                        className="w-16 border rounded px-2 py-2 text-center"
+                        title="Quantity used"
+                      />
+                      <button type="button" onClick={() => removeConsumedProduct(i, j)} className="p-1.5 text-red-500 hover:bg-red-50 rounded" title="Remove product">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => addConsumedProduct(i)}
+                    className="inline-flex items-center gap-1 text-xs text-amber-700 hover:underline"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Product used (deducted from stock, not billed)
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>

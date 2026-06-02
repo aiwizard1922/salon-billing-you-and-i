@@ -33,6 +33,7 @@ const migrationOrder = [
   'db/migrations/017-remove-other-custom-placeholder-service.sql',
   'db/migrations/018-payment-split-amounts.sql',
   'db/migrations/019-move-payment-split-to-notes-drop-amount-cols.sql',
+  'db/migrations/020-invoice-consumed-products.sql',
 ];
 
 /** Safe to ignore when re-running migrations. */

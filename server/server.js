@@ -587,6 +587,7 @@ app.post('/api/invoices', async (req, res) => {
       notes,
       staffId,
       sendWhatsApp,
+      consumedProducts,
     } = req.body;
     const hasItems = Array.isArray(items) && items.length > 0 && items.some((i) => i?.service_name?.trim());
     if (!hasItems) {
@@ -672,6 +673,14 @@ app.post('/api/invoices', async (req, res) => {
         }
       } catch (syncErr) {
         console.error('[Invoice] Catalog sync failed:', name, syncErr.message);
+      }
+    }
+
+    if (Array.isArray(consumedProducts) && consumedProducts.length > 0) {
+      try {
+        await dbInventory.addConsumedProducts(data.id, consumedProducts);
+      } catch (consumeErr) {
+        console.error('[Invoice] Saving consumed products failed:', consumeErr.message);
       }
     }
 
@@ -897,6 +906,14 @@ app.post('/api/invoices/:id/pay', async (req, res) => {
       secondaryPaymentMethod: secMethodOut,
       paymentSplitByMethod,
     });
+
+    // Deduct stock for sold retail products and products consumed delivering services.
+    try {
+      await dbInventory.deductInvoiceStock(invoiceId);
+    } catch (stockErr) {
+      console.error('[Invoice] Stock deduction failed:', stockErr.message);
+    }
+
     const customer = await db.getCustomerById(updated.customer_id);
     if (customer?.phone && whatsapp.isConfigured()) {
       const r = await whatsapp.sendPaymentReceipt({
@@ -906,6 +923,8 @@ app.post('/api/invoices/:id/pay', async (req, res) => {
         amount: updated.total,
       });
       await db.logWhatsApp(customer.phone, 'payment_receipt', r.ok ? 'sent' : 'failed', r.error);
+      if (r.ok) console.log('[WhatsApp] Payment receipt sent to', customer.phone);
+      else console.error('[WhatsApp] Payment receipt failed:', r.error);
     }
 
     if (invoiceEmail.isNotifyReady()) {
@@ -1588,7 +1607,11 @@ app.get('/api/analytics/clients/debug', async (req, res) => {
 });
 
 app.get('/api/whatsapp/status', (req, res) => {
-  res.json({ configured: whatsapp.isConfigured() });
+  res.json(whatsapp.getWhatsAppStatus());
+});
+
+app.get('/api/email/status', (req, res) => {
+  res.json(invoiceEmail.getNotifyStatus());
 });
 
 app.get('/api/email/status', (req, res) => {
@@ -1738,7 +1761,7 @@ if (clientDist) {
   });
 }
 
-app.listen(PORT, () => {
+const server = process.env.NODE_ENV === 'test' ? null : app.listen(PORT, () => {
   console.log(`Salon Billing API at http://localhost:${PORT}`);
   const emailStatus = invoiceEmail.getNotifyStatus();
   if (emailStatus.recipients.length > 0) {
@@ -1747,4 +1770,15 @@ app.listen(PORT, () => {
       : `incomplete (${emailStatus.missing.join('; ')})`;
     console.log(`[Invoice email] Notify → ${emailStatus.recipients.join(', ')} | ${via}`);
   }
+
+  const waStatus = whatsapp.getWhatsAppStatus();
+  if (waStatus.configured) {
+    console.log(
+      `[WhatsApp] Ready | bill=${waStatus.billTemplate} payment=${waStatus.paymentTemplate}`,
+    );
+  } else if (waStatus.missing.length) {
+    console.log(`[WhatsApp] Not configured (${waStatus.missing.join(', ')})`);
+  }
 });
+
+module.exports = { app, server };

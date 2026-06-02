@@ -21,6 +21,19 @@ export default function Inventory() {
   const [filterLowStock, setFilterLowStock] = useState(false);
   const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [supplierForm, setSupplierForm] = useState({ name: '', contact: '', email: '', phone: '', address: '' });
+  const [historyProduct, setHistoryProduct] = useState(null);
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const openHistory = (p) => {
+    setHistoryProduct(p);
+    setHistoryRows([]);
+    setHistoryLoading(true);
+    fetch(`${API}/inventory/products/${p.id}/movements`)
+      .then((r) => r.json())
+      .then((d) => setHistoryRows(d.success ? d.data : []))
+      .finally(() => setHistoryLoading(false));
+  };
 
   const load = () => {
     Promise.all([
@@ -305,6 +318,7 @@ export default function Inventory() {
                   <td className="py-3 px-4 text-right flex gap-2 justify-end">
                     <button onClick={() => { setShowAdjustModal(p); setAdjustForm({ quantityChange: 0, reason: '' }); }} className="text-blue-600 hover:underline text-sm">Adjust</button>
                     <button onClick={() => startEdit(p)} className="text-amber-600 hover:underline text-sm">Edit</button>
+                    <button onClick={() => openHistory(p)} className="text-slate-600 hover:underline text-sm">History</button>
                   </td>
                 </tr>
               ))}
@@ -343,6 +357,46 @@ export default function Inventory() {
             <div className="mt-6 flex gap-2">
               <button onClick={handleAdjust} className="px-4 py-2 bg-slate-800 text-white rounded-lg">Apply</button>
               <button onClick={() => setShowAdjustModal(null)} className="px-4 py-2 border rounded-lg">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {historyProduct && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setHistoryProduct(null)}>
+          <div className="bg-white rounded-xl p-6 max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-slate-800 mb-1">Stock history: {historyProduct.name}</h3>
+            <p className="text-sm text-slate-500 mb-4">Current: {historyProduct.quantity} {historyProduct.unit}</p>
+            {historyLoading ? (
+              <p className="text-slate-500 text-sm py-6 text-center">Loading…</p>
+            ) : historyRows.length === 0 ? (
+              <p className="text-slate-500 text-sm py-6 text-center">No movements recorded yet.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="text-left py-2 px-3 font-medium text-slate-600">When</th>
+                    <th className="text-left py-2 px-3 font-medium text-slate-600">Change</th>
+                    <th className="text-right py-2 px-3 font-medium text-slate-600">After</th>
+                    <th className="text-left py-2 px-3 font-medium text-slate-600">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyRows.map((m) => (
+                    <tr key={m.id} className="border-t border-slate-100">
+                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap">{new Date(m.created_at).toLocaleString()}</td>
+                      <td className={`py-2 px-3 font-medium ${m.quantity_change < 0 ? 'text-red-600' : 'text-green-700'}`}>
+                        {m.quantity_change > 0 ? `+${m.quantity_change}` : m.quantity_change}
+                      </td>
+                      <td className="py-2 px-3 text-right">{m.quantity_after}</td>
+                      <td className="py-2 px-3 text-slate-600">{m.reason || m.reference_type || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div className="mt-6 flex justify-end">
+              <button onClick={() => setHistoryProduct(null)} className="px-4 py-2 border rounded-lg">Close</button>
             </div>
           </div>
         </div>

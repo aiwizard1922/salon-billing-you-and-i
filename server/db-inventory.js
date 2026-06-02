@@ -91,18 +91,37 @@ async function updateProduct(id, data) {
      supplier_id = COALESCE($9, supplier_id), is_active = COALESCE($10, is_active), updated_at = NOW() WHERE id = $11`,
     [data.name, data.sku, data.category, data.unit, data.costPrice, data.sellingPrice, data.quantity, data.lowStockThreshold, data.supplierId, data.isActive, id]
   );
+  // Editing quantity directly must leave an audit trail (so movements reconcile with quantity).
+  const before = Number(p.quantity) || 0;
+  const newQ = data.quantity;
+  if (newQ != null && newQ !== '' && Number.isFinite(Number(newQ)) && Number(newQ) !== before) {
+    const delta = Number(newQ) - before;
+    await pool.query(
+      `INSERT INTO product_movements (product_id, type, quantity_change, quantity_after, reason, reference_type, reference_id)
+       VALUES ($1, 'adjustment', $2, $3, $4, 'product_edit', $5)`,
+      [id, delta, Number(newQ), 'Edited via product form', id]
+    );
+  }
   return getProductById(id);
 }
 
 async function adjustProductStock(productId, quantityChange, reason, referenceType, referenceId) {
   const p = await getProductById(productId);
   if (!p) return null;
-  const newQty = Math.max(0, (p.quantity || 0) + quantityChange);
+  const before = Number(p.quantity) || 0;
+  const requested = Number(quantityChange) || 0;
+  const newQty = Math.max(0, before + requested);
+  const applied = newQty - before; // what actually changed (stock cannot go below 0)
+  let finalReason = reason || null;
+  if (applied !== requested) {
+    // Oversell/over-consume: record the shortfall instead of silently losing it.
+    finalReason = `${reason || 'Adjustment'} — requested ${requested}, applied ${applied} (stock floored at 0)`;
+  }
   await pool.query('UPDATE products SET quantity = $1, updated_at = NOW() WHERE id = $2', [newQty, productId]);
   await pool.query(
     `INSERT INTO product_movements (product_id, type, quantity_change, quantity_after, reason, reference_type, reference_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [productId, quantityChange >= 0 ? 'in' : 'out', quantityChange, newQty, reason || null, referenceType || null, referenceId || null]
+    [productId, applied >= 0 ? 'in' : 'out', applied, newQty, finalReason, referenceType || null, referenceId || null]
   );
   return getProductById(productId);
 }
@@ -122,6 +141,70 @@ async function getProductMovements(productId, limit = 50) {
   return res.rows;
 }
 
+/** Save products consumed (used, not sold) while delivering services on an invoice. */
+async function addConsumedProducts(invoiceId, consumed) {
+  if (!Array.isArray(consumed)) return;
+  for (const c of consumed) {
+    const productId = Number(c.productId ?? c.product_id);
+    const qty = Math.round(Number(c.quantity) || 0);
+    if (!Number.isFinite(productId) || productId <= 0 || qty <= 0) continue;
+    await pool.query(
+      `INSERT INTO invoice_consumed_products (invoice_id, product_id, quantity, service_name)
+       VALUES ($1, $2, $3, $4)`,
+      [invoiceId, productId, qty, c.serviceName || c.service_name || null]
+    );
+  }
+}
+
+async function getConsumedProducts(invoiceId) {
+  const res = await pool.query(
+    `SELECT icp.*, p.name AS product_name, p.unit
+       FROM invoice_consumed_products icp
+       JOIN products p ON p.id = icp.product_id
+      WHERE icp.invoice_id = $1
+      ORDER BY icp.id`,
+    [invoiceId]
+  );
+  return res.rows;
+}
+
+/**
+ * Deduct stock for a paid invoice: both retail [Product] sale lines and consumed (back-bar) products.
+ * Call once, right after the invoice is marked paid (the already-paid guard keeps it idempotent).
+ */
+async function deductInvoiceStock(invoiceId) {
+  // 1) Retail product sale lines: "[Product] <name>" matched to active products by name.
+  const saleLines = await pool.query(
+    `SELECT TRIM(SUBSTRING(service_name FROM LENGTH('[Product] ') + 1)) AS name,
+            SUM(quantity)::int AS qty
+       FROM invoice_items
+      WHERE invoice_id = $1 AND service_name LIKE '[Product] %'
+      GROUP BY 1
+      HAVING TRIM(SUBSTRING(service_name FROM LENGTH('[Product] ') + 1)) <> ''`,
+    [invoiceId]
+  );
+  for (const line of saleLines.rows) {
+    const found = await pool.query(
+      `SELECT id FROM products WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND is_active = TRUE LIMIT 1`,
+      [line.name]
+    );
+    if (found.rows.length && line.qty > 0) {
+      await adjustProductStock(found.rows[0].id, -line.qty, `Sold on invoice ${invoiceId}`, 'invoice_sale', invoiceId);
+    }
+  }
+
+  // 2) Consumed (back-bar) products recorded against the invoice.
+  const consumed = await pool.query(
+    'SELECT product_id, SUM(quantity)::int AS qty FROM invoice_consumed_products WHERE invoice_id = $1 GROUP BY product_id',
+    [invoiceId]
+  );
+  for (const row of consumed.rows) {
+    if (row.qty > 0) {
+      await adjustProductStock(row.product_id, -row.qty, `Used in service on invoice ${invoiceId}`, 'invoice_consumption', invoiceId);
+    }
+  }
+}
+
 module.exports = {
   getSuppliers,
   createSupplier,
@@ -134,4 +217,7 @@ module.exports = {
   adjustProductStock,
   getLowStockProducts,
   getProductMovements,
+  addConsumedProducts,
+  getConsumedProducts,
+  deductInvoiceStock,
 };

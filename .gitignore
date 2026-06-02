@@ -19,3 +19,6 @@ backups/
 # Unrelated projects (do not add to salon-billing)
 fs-for-f/
 test-3d/
+
+# Editor
+.cursor/
