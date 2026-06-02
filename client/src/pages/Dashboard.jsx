@@ -351,48 +351,45 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="space-y-8 animate-pulse">
-        <div className="h-9 bg-slate-200/90 rounded-lg w-52" />
-        <div className="h-44 bg-slate-200/80 rounded-2xl" />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <div className="h-72 bg-slate-200/70 rounded-2xl" />
-          <div className="h-72 bg-slate-200/70 rounded-2xl" />
+      <div className="space-y-6 animate-pulse">
+        <div className="h-8 bg-slate-200 rounded-lg w-52" />
+        <div className="h-32 bg-slate-100 rounded-xl" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="h-72 bg-slate-100 rounded-xl" />
+          <div className="h-72 bg-slate-100 rounded-xl" />
         </div>
-        <div className="h-14 bg-slate-200/70 rounded-2xl" />
       </div>
     );
   }
 
+  // Clean, minimal design tokens — flat cards, one subtle border, restrained accents.
+  const card = 'bg-white rounded-xl border border-slate-200';
+  const cardHead = 'px-5 py-4 border-b border-slate-100 flex items-center justify-between';
+  const sectionTitle = 'font-semibold text-slate-900';
+  const subtleLink = 'text-sm font-medium text-amber-600 hover:text-amber-700';
+
   return (
-    <div className="space-y-10 pb-6">
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-5">
+    <div className="space-y-6 pb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-[1.75rem]">Dashboard</h2>
-          <p className="mt-2 inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-600">
-            <span>
-              {new Date().toLocaleDateString('en-IN', {
-                weekday: 'long',
-                day: 'numeric',
-                month: 'long',
-                timeZone: 'Asia/Kolkata',
-              })}
-            </span>
-            <span className="rounded-md bg-slate-100/90 px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-slate-500">
-              IST
-            </span>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Dashboard</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            {new Date().toLocaleDateString('en-IN', {
+              weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata',
+            })}{' '}· IST
           </p>
         </div>
         <div className="flex flex-wrap gap-2.5">
           <button
             type="button"
             onClick={load}
-            className="px-4 py-2.5 text-sm font-medium rounded-xl border border-slate-200/90 bg-white/90 text-slate-700 shadow-sm shadow-slate-200/40 backdrop-blur-sm hover:bg-white hover:border-slate-300/90 hover:shadow transition-all duration-200"
+            className="px-4 py-2 text-sm font-medium rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition-colors"
           >
             Refresh
           </button>
           <Link
             to="/reports/sales"
-            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-md shadow-amber-500/30 ring-1 ring-amber-400/30 hover:from-amber-600 hover:to-amber-700 hover:shadow-lg hover:shadow-amber-500/25 transition-all duration-200"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-amber-500 text-white hover:bg-amber-600 transition-colors"
           >
             <BarChart3 className="w-4 h-4" />
             Full reports
@@ -401,11 +398,11 @@ export default function Dashboard() {
       </div>
 
       {error && (
-        <div className="p-4 bg-amber-50/90 border border-amber-200/80 rounded-2xl text-amber-900 flex items-center justify-between gap-4 shadow-sm">
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 flex items-center justify-between gap-4">
           <span className="text-sm">{error}</span>
           <button
             onClick={load}
-            className="px-3.5 py-2 bg-amber-200/80 hover:bg-amber-300/90 rounded-xl text-sm font-medium shrink-0 transition-colors"
+            className="px-3.5 py-2 bg-amber-100 hover:bg-amber-200 rounded-lg text-sm font-medium shrink-0 transition-colors"
           >
             Retry
           </button>
@@ -413,70 +410,41 @@ export default function Dashboard() {
       )}
 
       {/* Operational strip first — no revenue figures */}
-      <div className="bg-white rounded-2xl border border-slate-100/90 p-5 md:p-6 shadow-md shadow-slate-200/45 ring-1 ring-slate-900/[0.04]">
-        <div className="mb-5 pb-3 border-b border-slate-100">
-          <h3 className="font-semibold text-slate-900">Quick access</h3>
+      <div className={`${card} p-5`}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className={sectionTitle}>Quick access</h3>
+          <Link to="/invoices/new" className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 transition-colors">
+            <Plus className="w-4 h-4" strokeWidth={2.25} /> Quick Sales
+          </Link>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Link
-            to="/staff"
-            className="flex items-center gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-white hover:border-indigo-200/60 hover:shadow-sm transition-all"
-          >
-            <div className="p-2 rounded-xl bg-indigo-100 text-indigo-700 ring-1 ring-indigo-200/50">
-              <UserCog className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-slate-800">Staff</p>
-              <p className="text-xs text-slate-500">{staffCount ?? '–'} on roster</p>
-            </div>
-          </Link>
-          <Link
-            to="/expenses"
-            className="flex items-center gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-white hover:border-rose-200/60 hover:shadow-sm transition-all"
-          >
-            <div className="p-2 rounded-xl bg-rose-100 text-rose-700 ring-1 ring-rose-200/50">
-              <Receipt className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-slate-800">Expenses</p>
-              <p className="text-xs text-slate-500">Log business spends</p>
-            </div>
-          </Link>
-          <Link
-            to="/appointments"
-            className="flex items-center gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-white hover:border-cyan-200/60 hover:shadow-sm transition-all col-span-2"
-          >
-            <div className="p-2 rounded-xl bg-cyan-100 text-cyan-700 ring-1 ring-cyan-200/50">
-              <Calendar className="w-5 h-5" />
-            </div>
-            <div className="flex-1 flex items-center justify-between min-w-0">
-              <div>
-                <p className="text-sm font-semibold text-slate-800">Appointments</p>
-                <p className="text-xs text-slate-500">{upcomingAppointments.length} upcoming (2 wks)</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {[
+            { to: '/staff', icon: UserCog, label: 'Staff', sub: `${staffCount ?? '–'} on roster`, tint: 'bg-indigo-50 text-indigo-600' },
+            { to: '/expenses', icon: Receipt, label: 'Expenses', sub: 'Log business spends', tint: 'bg-rose-50 text-rose-600' },
+            { to: '/appointments', icon: Calendar, label: 'Appointments', sub: `${upcomingAppointments.length} upcoming (2 wks)`, tint: 'bg-cyan-50 text-cyan-600' },
+          ].map(({ to, icon: Icon, label, sub, tint }) => (
+            <Link
+              key={to}
+              to={to}
+              className="flex items-center gap-3 p-3.5 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-colors"
+            >
+              <div className={`p-2 rounded-lg ${tint}`}>
+                <Icon className="w-5 h-5" />
               </div>
-              <ArrowUpRight className="w-4 h-4 text-slate-400 shrink-0" />
-            </div>
-          </Link>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-800">{label}</p>
+                <p className="text-xs text-slate-500 truncate">{sub}</p>
+              </div>
+            </Link>
+          ))}
         </div>
-        <Link
-          to="/invoices/new"
-          className="mt-5 flex items-center justify-center gap-2 w-full py-3.5 rounded-xl bg-gradient-to-r from-slate-800 to-slate-900 text-white text-sm font-semibold shadow-md shadow-slate-900/20 hover:from-slate-700 hover:to-slate-800 transition-all"
-        >
-          <Plus className="w-5 h-5" strokeWidth={2.25} />
-          Quick Sales
-        </Link>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="bg-white rounded-2xl border border-slate-100/90 shadow-md shadow-slate-200/45 ring-1 ring-slate-900/[0.04] overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-            <h3 className="font-semibold text-slate-900">Upcoming appointments</h3>
-            <Link
-              to="/appointments"
-              className="text-sm font-medium text-amber-600 hover:text-amber-700 px-2 py-1 rounded-lg hover:bg-amber-50 transition-colors"
-            >
-              Calendar
-            </Link>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className={`${card} overflow-hidden`}>
+          <div className={cardHead}>
+            <h3 className={sectionTitle}>Upcoming appointments</h3>
+            <Link to="/appointments" className={subtleLink}>Calendar</Link>
           </div>
           {upcomingAppointments.length === 0 ? (
             <p className="p-8 text-center text-slate-500 text-sm">No bookings in the next two weeks.</p>
@@ -504,15 +472,10 @@ export default function Dashboard() {
           )}
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-100/90 shadow-md shadow-slate-200/45 ring-1 ring-slate-900/[0.04] overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-            <h3 className="font-semibold text-slate-900">Recent invoices</h3>
-            <Link
-              to="/invoices/new"
-              className="text-sm font-medium text-amber-600 hover:text-amber-700 px-2 py-1 rounded-lg hover:bg-amber-50 transition-colors"
-            >
-              + Add
-            </Link>
+        <div className={`${card} overflow-hidden`}>
+          <div className={cardHead}>
+            <h3 className={sectionTitle}>Recent invoices</h3>
+            <Link to="/invoices/new" className={subtleLink}>+ Add</Link>
           </div>
           {invoices.length === 0 ? (
             <p className="p-8 text-center text-slate-500">No invoices yet.</p>
@@ -573,48 +536,44 @@ export default function Dashboard() {
       <details
         open={financialOverviewOpen}
         onToggle={(e) => setFinancialOverviewOpen(e.currentTarget.open)}
-        className="group rounded-2xl border border-slate-200/90 bg-slate-50/50 open:bg-white shadow-sm open:shadow-md ring-1 ring-slate-900/[0.04] transition-shadow"
+        className="group rounded-xl border border-slate-200 bg-white"
       >
-        <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-4 sm:px-5 sm:py-4 [&::-webkit-details-marker]:hidden">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-200/80 text-slate-600 ring-1 ring-slate-300/50 transition-colors group-open:bg-emerald-50 group-open:text-emerald-700 group-open:ring-emerald-200/70">
+        <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 transition-colors group-open:bg-emerald-50 group-open:text-emerald-600">
             <EyeOff className="h-5 w-5 group-open:hidden" strokeWidth={2} aria-hidden />
             <Eye className="hidden h-5 w-5 group-open:block" strokeWidth={2} aria-hidden />
           </span>
-          <div className="min-w-0 flex-1">
-            <p className="font-semibold text-slate-900">Financial overview</p>
-          </div>
+          <p className="font-semibold text-slate-900 flex-1 min-w-0">Financial overview</p>
           <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-200 group-open:rotate-180" aria-hidden />
         </summary>
-        <div className="border-t border-slate-200/80 px-4 pb-6 pt-2 sm:px-5 space-y-8">
-          <div className="relative overflow-hidden rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white via-amber-50/25 to-white shadow-lg shadow-slate-300/25 ring-1 ring-slate-900/[0.04]">
-            <div className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded-full bg-amber-300/20 blur-3xl" aria-hidden />
-            <div className="pointer-events-none absolute -bottom-28 -left-16 h-52 w-52 rounded-full bg-emerald-400/10 blur-3xl" aria-hidden />
-            <div className="relative px-5 py-5 md:px-6 md:py-6">
-              <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+        <div className="border-t border-slate-100 px-5 pb-6 pt-5 space-y-6">
+          <div className="rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-5 py-5">
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex items-start gap-4 min-w-0">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-100 to-amber-50 text-amber-700 shadow-inner shadow-amber-900/5 ring-1 ring-amber-200/60">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
                     <TrendingUp className="h-6 w-6" strokeWidth={2} />
                   </div>
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Collected today</p>
-                    <p className="mt-1.5 text-3xl font-bold tabular-nums tracking-tight text-slate-900 md:text-[2.35rem] md:leading-none">
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Collected today</p>
+                    <p className="mt-1 text-3xl font-bold tabular-nums tracking-tight text-slate-900">
                       {formatINR(collectedTodayAmount)}
                     </p>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:gap-6 lg:justify-end">
-                  <div className="rounded-xl border border-slate-100/90 bg-white/60 px-4 py-3 backdrop-blur-sm sm:text-right">
-                    <p className="text-[0.65rem] font-semibold uppercase tracking-wide text-slate-500">Expenses</p>
+                <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:justify-end">
+                  <div className="rounded-lg border border-slate-200 px-4 py-3 sm:text-right">
+                    <p className="text-[0.65rem] font-medium uppercase tracking-wide text-slate-500">Expenses</p>
                     <p className="mt-1 text-lg font-semibold tabular-nums text-slate-800">{formatINR(sheetExpenses)}</p>
                   </div>
-                  <div className="rounded-xl border border-emerald-100/80 bg-emerald-50/50 px-4 py-3 backdrop-blur-sm sm:text-right">
-                    <p className="text-[0.65rem] font-semibold uppercase tracking-wide text-emerald-700/80">Net</p>
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3 sm:text-right">
+                    <p className="text-[0.65rem] font-medium uppercase tracking-wide text-emerald-700">Net</p>
                     <p className="mt-1 text-lg font-semibold tabular-nums text-emerald-800">{formatINR(sheetNet)}</p>
                   </div>
                 </div>
               </div>
               {dailySheet && (
-                <div className="relative border-t border-slate-200/60 bg-white/50 -mx-5 md:-mx-6 mt-2 px-5 py-5 md:px-6 space-y-4">
+                <div className="border-t border-slate-100 -mx-5 mt-5 px-5 pt-5 space-y-4">
                   {dailySheetRows.length > 0 && (
                     <div className="overflow-x-auto rounded-xl border border-slate-200/80 bg-white shadow-sm">
                       <table className="w-full min-w-[520px] text-sm">
@@ -725,11 +684,11 @@ export default function Dashboard() {
             />
             <Link
               to="/clients"
-              className="group flex h-full flex-col rounded-2xl border border-slate-200/90 bg-gradient-to-b from-white to-slate-50/40 p-4 shadow-sm shadow-slate-200/40 ring-1 ring-slate-900/[0.03] transition duration-200 hover:-translate-y-0.5 hover:border-amber-200/90 hover:shadow-md hover:shadow-amber-900/5 md:p-5"
+              className="group flex h-full flex-col rounded-xl border border-slate-200 bg-white p-4 hover:border-slate-300 hover:bg-slate-50 transition-colors md:p-5"
             >
               <div className="flex items-start justify-between gap-2">
                 <span className="text-sm font-medium text-slate-600">Client insights</span>
-                <div className="rounded-xl bg-gradient-to-br from-amber-50 to-amber-100/50 p-1.5 text-amber-600 ring-1 ring-amber-100/80 shadow-sm">
+                <div className="rounded-lg bg-amber-50 p-1.5 text-amber-600">
                   <Users className={`h-5 w-5 ${customerCount != null ? '' : 'text-amber-300'}`} />
                 </div>
               </div>
@@ -741,11 +700,11 @@ export default function Dashboard() {
             </Link>
             <Link
               to="/memberships"
-              className="group flex h-full flex-col rounded-2xl border border-slate-200/90 bg-gradient-to-b from-white to-slate-50/40 p-4 shadow-sm shadow-slate-200/40 ring-1 ring-slate-900/[0.03] transition duration-200 hover:-translate-y-0.5 hover:border-pink-200/90 hover:shadow-md hover:shadow-pink-900/5 md:p-5"
+              className="group flex h-full flex-col rounded-xl border border-slate-200 bg-white p-4 hover:border-slate-300 hover:bg-slate-50 transition-colors md:p-5"
             >
               <div className="flex items-start justify-between gap-2">
                 <span className="text-sm font-medium text-slate-600">Memberships</span>
-                <div className="rounded-xl bg-gradient-to-br from-pink-50 to-pink-100/40 p-1.5 text-pink-600 ring-1 ring-pink-100/80 shadow-sm">
+                <div className="rounded-lg bg-pink-50 p-1.5 text-pink-600">
                   <Gift className="h-5 w-5" />
                 </div>
               </div>
@@ -757,7 +716,7 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <div className="bg-white rounded-2xl border border-slate-100/90 p-5 md:p-6 shadow-md shadow-slate-200/45 ring-1 ring-slate-900/[0.04]">
+            <div className="bg-white rounded-xl border border-slate-200 p-5">
               <div className="flex items-start justify-between gap-3 mb-5 pb-3 border-b border-slate-100">
                 <div>
                   <h3 className="font-semibold text-slate-900 flex items-center gap-2.5">
@@ -798,7 +757,7 @@ export default function Dashboard() {
                 </ul>
               )}
             </div>
-            <div className="bg-white rounded-2xl border border-slate-100/90 p-5 md:p-6 shadow-md shadow-slate-200/45 ring-1 ring-slate-900/[0.04]">
+            <div className="bg-white rounded-xl border border-slate-200 p-5">
               <div className="flex items-start justify-between gap-3 mb-5 pb-3 border-b border-slate-100">
                 <div>
                   <h3 className="font-semibold text-slate-900 flex items-center gap-2.5">
@@ -842,7 +801,7 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-            <div className="xl:col-span-2 bg-white rounded-2xl border border-slate-100/90 p-5 md:p-6 shadow-md shadow-slate-200/45 ring-1 ring-slate-900/[0.04]">
+            <div className="xl:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
               <div className="mb-4 pb-3 border-b border-slate-100">
                 <h3 className="font-semibold text-slate-900">Revenue vs expenses</h3>
                 <p className="text-xs text-slate-500 mt-1">Last 14 days · IST</p>
@@ -886,7 +845,7 @@ export default function Dashboard() {
                 )}
               </div>
             </div>
-            <div className="bg-white rounded-2xl border border-slate-100/90 p-5 md:p-6 shadow-md shadow-slate-200/45 ring-1 ring-slate-900/[0.04]">
+            <div className="bg-white rounded-xl border border-slate-200 p-5">
               <div className="mb-4 pb-3 border-b border-slate-100">
                 <h3 className="font-semibold text-slate-900">Payment mix</h3>
                 <p className="text-xs text-slate-500 mt-1">Last 7 days</p>
@@ -913,7 +872,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100/90 p-5 md:p-6 shadow-md shadow-slate-200/45 ring-1 ring-slate-900/[0.04]">
+          <div className="bg-white rounded-xl border border-slate-200 p-5">
             <div className="flex justify-between items-center mb-5 pb-3 border-b border-slate-100">
               <h3 className="font-semibold text-slate-900">Pending vs paid</h3>
               <Link to="/invoices" className="text-sm font-medium text-amber-600 hover:text-amber-700 px-2 py-1 rounded-lg hover:bg-amber-50 transition-colors">
@@ -921,7 +880,7 @@ export default function Dashboard() {
               </Link>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl bg-gradient-to-br from-amber-50 to-orange-50/80 border border-amber-100/80 p-4 ring-1 ring-amber-100/50">
+              <div className="rounded-lg bg-amber-50 border border-amber-100 p-4">
                 <div className="flex items-center gap-2 text-amber-900 text-sm font-semibold">
                   <FileText className="w-4 h-4" />
                   Pending
@@ -929,7 +888,7 @@ export default function Dashboard() {
                 <p className="text-xl font-bold text-slate-900 mt-2 tabular-nums tracking-tight">{formatINR(pendingAmt)}</p>
                 <p className="text-xs text-amber-800/75 mt-1">{pending.length} invoice(s)</p>
               </div>
-              <div className="rounded-xl bg-gradient-to-br from-emerald-50 to-green-50/80 border border-emerald-100/80 p-4 ring-1 ring-emerald-100/50">
+              <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-4">
                 <div className="flex items-center gap-2 text-emerald-900 text-sm font-semibold">
                   <DollarSign className="w-4 h-4" />
                   Paid (total)
@@ -965,10 +924,10 @@ export default function Dashboard() {
 
 function StatCard({ icon: Icon, label, value, sub, accent, iconBg }) {
   return (
-    <div className="flex h-full flex-col rounded-2xl border border-slate-200/90 bg-gradient-to-b from-white to-slate-50/50 p-4 shadow-sm shadow-slate-200/35 ring-1 ring-slate-900/[0.03] transition duration-200 hover:-translate-y-0.5 hover:border-slate-300/90 hover:shadow-md md:p-5">
+    <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-white p-4 hover:border-slate-300 transition-colors md:p-5">
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-medium leading-snug text-slate-600">{label}</span>
-        <div className={`shrink-0 rounded-xl p-1.5 shadow-inner ring-1 ring-slate-900/10 ${iconBg}`}>
+        <div className={`shrink-0 rounded-lg p-1.5 ${iconBg}`}>
           <Icon className="h-5 w-5" strokeWidth={2} />
         </div>
       </div>

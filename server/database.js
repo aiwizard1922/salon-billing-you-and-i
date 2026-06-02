@@ -730,7 +730,9 @@ async function getDailySheetBreakdown(ymd) {
          COUNT(*) FILTER (WHERE COALESCE(discount_amount, 0) > 0)::int AS discount_invoice_count,
          COUNT(*) FILTER (WHERE COALESCE(tax_amount, 0) > 0)::int AS tax_invoice_count,
          COALESCE(SUM(COALESCE(amount_from_membership, 0)), 0)::numeric AS wallet_used,
-         COUNT(*) FILTER (WHERE COALESCE(amount_from_membership, 0) > 0)::int AS prepaid_use_count
+         COUNT(*) FILTER (WHERE COALESCE(amount_from_membership, 0) > 0)::int AS prepaid_use_count,
+         COUNT(*)::int AS bill_count,
+         COALESCE(SUM(COALESCE(total, 0)), 0)::numeric AS bill_total
        FROM invoices i
        WHERE ${dayClause}`,
       [ymd]
@@ -825,10 +827,16 @@ async function getDailySheetBreakdown(ymd) {
     servicesAmt + productsAmt + memAmt + prepaidNeg + discNeg + taxAmt,
   );
 
+  const billCount = Number(inv.bill_count) || 0;
+  const billTotal = round2(inv.bill_total);
+
   return {
     date: ymd,
     rows,
     footer: {
+      billCount,
+      billTotal,
+      billAverage: billCount > 0 ? round2(billTotal / billCount) : 0,
       collectedNewMoney: collected,
       /** Cash + UPI + card only; prepaid (wallet) is not included. */
       totalReceived: collected,

@@ -34,6 +34,8 @@ const migrationOrder = [
   'db/migrations/018-payment-split-amounts.sql',
   'db/migrations/019-move-payment-split-to-notes-drop-amount-cols.sql',
   'db/migrations/020-invoice-consumed-products.sql',
+  'db/migrations/021-daily-closes.sql',
+  'db/migrations/022-daily-close-lock-audit.sql',
 ];
 
 /** Safe to ignore when re-running migrations. */

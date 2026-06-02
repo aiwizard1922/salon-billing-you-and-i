@@ -11,6 +11,7 @@ const dbCatalog = require('./db-catalog');
 const dbCrm = require('./db-crm');
 const dbStaffMgmt = require('./db-staff-management');
 const dbExpenses = require('./db-expenses');
+const dbEod = require('./db-eod');
 const whatsapp = require('./services/whatsapp');
 const invoiceEmail = require('./services/invoiceEmail');
 
@@ -319,6 +320,75 @@ app.get('/api/analytics/daily-sheet', async (req, res) => {
     const data = await db.getDailySheetBreakdown(date);
     if (!data) return res.status(400).json({ success: false, error: 'Invalid date (use YYYY-MM-DD)' });
     res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// --- End of day (cash close) ---
+// Returns the day's computed sheet + any saved close, so the screen can prefill.
+app.get('/api/eod', async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const sheet = await db.getDailySheetBreakdown(date);
+    if (!sheet) return res.status(400).json({ success: false, error: 'Invalid date (use YYYY-MM-DD)' });
+    const close = await dbEod.getDailyClose(date);
+    const audits = await dbEod.getCloseAudits(date);
+    res.json({ success: true, data: { date, sheet, close, audits } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/eod/history', async (req, res) => {
+  try {
+    const data = await dbEod.getRecentDailyCloses(req.query.limit);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Close a day (locks it). A locked day must be reopened before it can change again.
+// Money figures are recomputed server-side from the authoritative daily sheet.
+app.post('/api/eod', async (req, res) => {
+  try {
+    const { date, openingFloat, countedCash, notes, closedBy } = req.body;
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    if (!date || !re.test(date)) return res.status(400).json({ success: false, error: 'date required as YYYY-MM-DD' });
+    const existing = await dbEod.getDailyClose(date);
+    if (existing && existing.locked) {
+      return res.status(409).json({ success: false, error: 'This day is closed and locked. Reopen it to make changes.' });
+    }
+    const sheet = await db.getDailySheetBreakdown(date);
+    if (!sheet) return res.status(400).json({ success: false, error: 'Invalid date' });
+    const f = sheet.footer || {};
+    const saved = await dbEod.closeDay({
+      closeDate: date,
+      openingFloat: Number(openingFloat) || 0,
+      countedCash: Number(countedCash) || 0,
+      cashCollected: Number(f.cash) || 0,
+      totalCollected: Number(f.collectedNewMoney ?? f.totalReceived) || 0,
+      expenses: Number(f.expenses) || 0,
+      notes,
+      closedBy,
+    });
+    res.status(201).json({ success: true, data: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Reopen a locked day for editing. Requires a reason; logged to the audit trail.
+app.post('/api/eod/reopen', async (req, res) => {
+  try {
+    const { date, reason, reopenedBy } = req.body;
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    if (!date || !re.test(date)) return res.status(400).json({ success: false, error: 'date required as YYYY-MM-DD' });
+    if (!reason || !String(reason).trim()) return res.status(400).json({ success: false, error: 'A reason is required to reopen a closed day.' });
+    const result = await dbEod.reopenDay({ closeDate: date, reason: String(reason).trim(), reopenedBy });
+    if (result.error) return res.status(400).json({ success: false, error: result.error });
+    res.json({ success: true, data: result.close });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

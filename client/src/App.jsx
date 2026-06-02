@@ -15,9 +15,10 @@ import Memberships from './pages/Memberships';
 import Expenses from './pages/Expenses';
 import ClientInsights from './pages/ClientInsights';
 import Inventory from './pages/Inventory';
+import EndOfDay from './pages/EndOfDay';
 import Catalog from './pages/Catalog';
 import CustomerProfile from './pages/CustomerProfile';
-import { LogOut, LayoutDashboard, Users, FilePlus, FileText, Calendar, Package, BookOpen, Megaphone, Gift, UserCheck, UserCog, BarChart3, Receipt } from 'lucide-react';
+import { LogOut, LayoutDashboard, Users, FilePlus, FileText, Calendar, Package, BookOpen, Megaphone, Gift, UserCheck, UserCog, BarChart3, Receipt, Lock } from 'lucide-react';
 
 const SIDEBAR_LINKS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -32,6 +33,7 @@ const SIDEBAR_LINKS = [
   { to: '/clients', label: 'Clients', icon: UserCheck },
   { to: '/staff', label: 'Staff', icon: UserCog },
   { to: '/expenses', label: 'Expenses', icon: Receipt },
+  { to: '/end-of-day', label: 'End of Day', icon: Lock },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
 ];
 
@@ -102,6 +104,7 @@ function AppLayout() {
           <Route path="/clients" element={<ClientInsights />} />
           <Route path="/staff" element={<Staff />} />
           <Route path="/expenses" element={<Expenses />} />
+          <Route path="/end-of-day" element={<EndOfDay />} />
           <Route path="/reports/*" element={<Reports />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
