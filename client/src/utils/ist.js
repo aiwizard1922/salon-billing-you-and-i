@@ -11,6 +11,24 @@ export function istMonthStr(d = new Date()) {
 }
 
 /**
+ * Inclusive calendar month in IST as { from, to }.
+ * For the current month, `to` is capped at today (no future empty days).
+ */
+export function monthRangeIST(ym, { capAtToday = true } = {}) {
+  const [y, m] = String(ym || '').split('-').map(Number);
+  if (!y || !m || m < 1 || m > 12) return { from: '', to: '' };
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const mm = String(m).padStart(2, '0');
+  let to = `${y}-${mm}-${String(last).padStart(2, '0')}`;
+  if (capAtToday) {
+    const today = istDateStr();
+    const ymPrefix = `${y}-${mm}`;
+    if (today.startsWith(ymPrefix) && today < to) to = today;
+  }
+  return { from: `${y}-${mm}-01`, to };
+}
+
+/**
  * Format a calendar date for display in Asia/Kolkata (en-IN).
  * Plain YYYY-MM-DD is anchored at noon IST so it never shifts to the wrong day.
  * ISO instants (e.g. from JSON APIs) are shown in the IST calendar.

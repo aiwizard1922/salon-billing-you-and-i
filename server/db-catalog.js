@@ -1,4 +1,5 @@
 const { pool } = require('./database');
+const { mapRowDates, mapRowsDates } = require('./date-utils');
 const SEED_SERVICES = require('./data/services');
 
 function serviceDedupeKey(s) {
@@ -115,7 +116,7 @@ async function getPromotions(filters = {}) {
   }
   query += ' ORDER BY end_date';
   const res = await pool.query(query, params);
-  return res.rows;
+  return mapRowsDates(res.rows, ['start_date', 'end_date']);
 }
 
 async function createPromotion({ name, description, discountType, discountValue, minPurchase, startDate, endDate }) {
@@ -124,7 +125,7 @@ async function createPromotion({ name, description, discountType, discountValue,
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
     [name || '', description || null, discountType || 'percent', discountValue ?? 0, minPurchase ?? 0, startDate, endDate]
   );
-  return res.rows[0];
+  return mapRowDates(res.rows[0], ['start_date', 'end_date']);
 }
 
 async function updatePromotion(id, data) {
@@ -137,7 +138,7 @@ async function updatePromotion(id, data) {
     [data.name, data.description, data.discountType, data.discountValue, data.minPurchase, data.startDate, data.endDate, data.isActive, id]
   );
   const res = await pool.query('SELECT * FROM catalog_promotions WHERE id = $1', [id]);
-  return res.rows[0] || null;
+  return mapRowDates(res.rows[0] || null, ['start_date', 'end_date']);
 }
 
 module.exports = {

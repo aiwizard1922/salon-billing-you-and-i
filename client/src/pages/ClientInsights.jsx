@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Users, UserPlus, RefreshCw, User, UserCheck } from 'lucide-react';
-import { istMonthStr, formatDateIST } from '../utils/ist';
+import { istMonthStr, formatDateIST, appointmentDateToYmd } from '../utils/ist';
 
 const API = '/api';
 
@@ -174,7 +174,7 @@ export default function ClientInsights() {
           {d.invoiceDateRange.min && (
             <button
               type="button"
-              onClick={() => setMonth(String(d.invoiceDateRange.min).slice(0, 7))}
+              onClick={() => setMonth((appointmentDateToYmd(d.invoiceDateRange.min) || '').slice(0, 7))}
               className="self-start px-3 py-1.5 bg-amber-200 hover:bg-amber-300 rounded-lg text-sm font-medium"
             >
               View {formatDateIST(d.invoiceDateRange.min, { month: 'long', year: 'numeric' })}

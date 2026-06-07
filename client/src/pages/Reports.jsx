@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom';
 import { formatINR } from '../utils/formatCurrency';
-import { istDateStr, istMonthStr, formatDateIST } from '../utils/ist';
+import { istDateStr, istMonthStr, formatDateIST, monthRangeIST } from '../utils/ist';
 import {
   ReportsSalesView,
   ReportsDailyView,
   ReportsStaffView,
   ReportsTrendsView,
+  ReportsProfitView,
 } from './reports/ReportViews';
 
 const API = '/api';
@@ -18,14 +19,6 @@ function rangeLastNDaysIST(n) {
   const startAnchor = new Date(endAnchor.getTime() - (n - 1) * 86400000);
   const from = startAnchor.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   return { from, to: end };
-}
-
-function monthRangeIST(ym) {
-  const [y, m] = ym.split('-').map(Number);
-  const last = new Date(y, m, 0).getDate();
-  const from = `${ym}-01`;
-  const to = `${ym}-${String(last).padStart(2, '0')}`;
-  return { from, to };
 }
 
 function istWeekdayMon0(ymd) {
@@ -71,6 +64,7 @@ const REPORT_TABS = [
   { path: '/reports/sales', label: 'Services and products' },
   { path: '/reports/daily', label: 'Daily sales' },
   { path: '/reports/staff', label: 'Staff' },
+  { path: '/reports/profit', label: 'Profit & loss' },
   { path: '/reports/trends', label: 'Monthly trends' },
 ];
 
@@ -82,7 +76,10 @@ export default function Reports() {
   const [monthlyByMethod, setMonthlyByMethod] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dailyReports, setDailyReports] = useState([]);
-  const [dailyReportDays, setDailyReportDays] = useState(30);
+  const [dailyReportMonth, setDailyReportMonth] = useState(() => istMonthStr());
+  const [dailyReportRange, setDailyReportRange] = useState({ from: '', to: '' });
+  const [dailyReportLoading, setDailyReportLoading] = useState(true);
+  const [dailyReportShowEmpty, setDailyReportShowEmpty] = useState(false);
 
   const [perfPreset, setPerfPreset] = useState('7');
   const [perfMonth, setPerfMonth] = useState(() => istMonthStr());
@@ -90,10 +87,17 @@ export default function Reports() {
   const [perfData, setPerfData] = useState(null);
   const [perfRange, setPerfRange] = useState({ from: '', to: '' });
 
-  const [staffCalMonth, setStaffCalMonth] = useState(() => istMonthStr());
-  const [staffCalData, setStaffCalData] = useState(null);
-  const [staffCalLoading, setStaffCalLoading] = useState(true);
-  const [staffCalSelectedYmd, setStaffCalSelectedYmd] = useState(() => istDateStr());
+  const [staffMonth, setStaffMonth] = useState(() => istMonthStr());
+  const [staffData, setStaffData] = useState(null);
+  const [staffLoading, setStaffLoading] = useState(true);
+  const [staffSelectedYmd, setStaffSelectedYmd] = useState(() => istDateStr());
+  const [staffRange, setStaffRange] = useState({ from: '', to: '' });
+
+  const [profitMonth, setProfitMonth] = useState(() => istMonthStr());
+  const [profitLoading, setProfitLoading] = useState(true);
+  const [profitData, setProfitData] = useState(null);
+  const [profitRange, setProfitRange] = useState({ from: '', to: '' });
+  const [profitMonthly, setProfitMonthly] = useState([]);
 
   useEffect(() => {
     Promise.all([
@@ -101,18 +105,53 @@ export default function Reports() {
       fetch(`${API}/analytics/monthly?months=12`).then((r) => r.json()),
       fetch(`${API}/analytics/daily-by-method?days=30`).then((r) => r.json()),
       fetch(`${API}/analytics/monthly-by-method?months=12`).then((r) => r.json()),
-      fetch(`${API}/analytics/daily-reports?days=${dailyReportDays}`).then((r) => r.json()),
     ])
-      .then(([dRes, mRes, dmRes, mmRes, drRes]) => {
+      .then(([dRes, mRes, dmRes, mmRes]) => {
         if (dRes.success) setDaily(dRes.data.map((r) => ({ ...r, revenue: Number(r.revenue) })));
         if (mRes.success) setMonthly(mRes.data);
         if (dmRes.success) setDailyByMethod(dmRes.data);
         if (mmRes.success) setMonthlyByMethod(mmRes.data);
-        if (drRes.success) setDailyReports(drRes.data || []);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [dailyReportDays]);
+  }, []);
+
+  useEffect(() => {
+    const r = monthRangeIST(dailyReportMonth);
+    setDailyReportRange(r);
+    if (!r.from || !r.to) return;
+    setDailyReportLoading(true);
+    const q = new URLSearchParams({ from: r.from, to: r.to });
+    fetch(`${API}/analytics/daily-reports?${q}`)
+      .then((res) => res.json())
+      .then((drRes) => {
+        if (drRes.success) setDailyReports(drRes.data || []);
+        else setDailyReports([]);
+      })
+      .catch(() => setDailyReports([]))
+      .finally(() => setDailyReportLoading(false));
+  }, [dailyReportMonth]);
+
+  useEffect(() => {
+    const r = monthRangeIST(profitMonth);
+    setProfitRange(r);
+    if (!r.from || !r.to) return;
+    setProfitLoading(true);
+    const q = new URLSearchParams({ from: r.from, to: r.to });
+    Promise.all([
+      fetch(`${API}/analytics/profit?${q}`).then((res) => res.json()),
+      fetch(`${API}/analytics/profit/monthly?months=12`).then((res) => res.json()),
+    ])
+      .then(([profitRes, monthlyRes]) => {
+        setProfitData(profitRes.success ? profitRes.data : null);
+        setProfitMonthly(monthlyRes.success ? monthlyRes.data || [] : []);
+      })
+      .catch(() => {
+        setProfitData(null);
+        setProfitMonthly([]);
+      })
+      .finally(() => setProfitLoading(false));
+  }, [profitMonth]);
 
   useEffect(() => {
     const r =
@@ -133,29 +172,25 @@ export default function Reports() {
   }, [perfPreset, perfMonth]);
 
   useEffect(() => {
-    const r = monthRangeIST(staffCalMonth);
-    setStaffCalLoading(true);
+    const r = monthRangeIST(staffMonth);
+    setStaffRange(r);
+    setStaffLoading(true);
     const q = new URLSearchParams({ from: r.from, to: r.to, limit: '40' });
     fetch(`${API}/analytics/sales-performance?${q}`)
       .then((res) => res.json())
       .then((res) => {
-        if (res.success && res.data) {
-          setStaffCalData({
-            staffDailyRows: res.data.staffDailyRows || [],
-            from: r.from,
-            to: r.to,
-          });
-        } else setStaffCalData(null);
+        if (res.success && res.data) setStaffData(res.data);
+        else setStaffData(null);
       })
-      .catch(() => setStaffCalData(null))
-      .finally(() => setStaffCalLoading(false));
-  }, [staffCalMonth]);
+      .catch(() => setStaffData(null))
+      .finally(() => setStaffLoading(false));
+  }, [staffMonth]);
 
   useEffect(() => {
     const today = istDateStr();
-    if (today.startsWith(staffCalMonth)) setStaffCalSelectedYmd(today);
-    else setStaffCalSelectedYmd(`${staffCalMonth}-01`);
-  }, [staffCalMonth]);
+    if (today.startsWith(staffMonth)) setStaffSelectedYmd(today);
+    else setStaffSelectedYmd(`${staffMonth}-01`);
+  }, [staffMonth]);
 
   useEffect(() => {
     const id = (location.hash || '').replace(/^#/, '');
@@ -194,7 +229,7 @@ export default function Reports() {
   }, [perfData?.products]);
 
   const staffPerfChart = useMemo(() => {
-    const rows = perfData?.staffSales || [];
+    const rows = staffData?.staffSales || [];
     return [...rows]
       .map((s) => ({
         ...s,
@@ -219,10 +254,10 @@ export default function Reports() {
         membership: Math.round(Number(s.membershipSales) * 100) / 100,
         membershipLineCount: Number(s.membershipLineCount) || 0,
       }));
-  }, [perfData?.staffSales]);
+  }, [staffData?.staffSales]);
 
   const staffCalByDate = useMemo(() => {
-    const rows = staffCalData?.staffDailyRows || [];
+    const rows = staffData?.staffDailyRows || [];
     const m = new Map();
     for (const row of rows) {
       const d = row.date;
@@ -242,7 +277,7 @@ export default function Reports() {
       m.set(k, [...list].sort(rankDay));
     });
     return m;
-  }, [staffCalData?.staffDailyRows]);
+  }, [staffData?.staffDailyRows]);
 
   const staffCalTotalsByYmd = useMemo(() => {
     const out = new Map();
@@ -255,9 +290,31 @@ export default function Reports() {
     return out;
   }, [staffCalByDate]);
 
-  const staffCalGridCells = useMemo(() => buildMonthCalendarCells(staffCalMonth), [staffCalMonth]);
+  const staffCalGridCells = useMemo(() => buildMonthCalendarCells(staffMonth), [staffMonth]);
 
-  const staffCalSelectedRows = staffCalByDate.get(staffCalSelectedYmd) || [];
+  const staffCalSelectedRows = staffCalByDate.get(staffSelectedYmd) || [];
+
+  const dailyReportDisplayRows = useMemo(() => {
+    const rows = [...(dailyReports || [])].sort((a, b) =>
+      String(a.date).localeCompare(String(b.date))
+    );
+    if (dailyReportShowEmpty) return rows;
+    return rows.filter(
+      (r) => (Number(r.revenue) || 0) > 0 || (Number(r.expenses) || 0) > 0
+    );
+  }, [dailyReports, dailyReportShowEmpty]);
+
+  const dailyReportTotals = useMemo(() => {
+    const rows = dailyReports || [];
+    return rows.reduce(
+      (acc, r) => ({
+        revenue: acc.revenue + (Number(r.revenue) || 0),
+        expenses: acc.expenses + (Number(r.expenses) || 0),
+        net: acc.net + (Number(r.net) || 0),
+      }),
+      { revenue: 0, expenses: 0, net: 0 }
+    );
+  }, [dailyReports]);
 
   if (loading) return <div className="text-slate-600 text-sm">Loading reports…</div>;
 
@@ -288,17 +345,25 @@ export default function Reports() {
     topProductsBar,
     formatCount,
     staffPerfChart,
-    staffCalMonth,
-    setStaffCalMonth,
-    staffCalLoading,
+    staffMonth,
+    setStaffMonth,
+    staffRange,
+    staffLoading,
+    staffData,
     staffCalGridCells,
     staffCalTotalsByYmd,
-    staffCalSelectedYmd,
-    setStaffCalSelectedYmd,
+    staffSelectedYmd,
+    setStaffSelectedYmd,
     staffCalSelectedRows,
     dailyReports,
-    dailyReportDays,
-    setDailyReportDays,
+    dailyReportMonth,
+    setDailyReportMonth,
+    dailyReportRange,
+    dailyReportLoading,
+    dailyReportShowEmpty,
+    setDailyReportShowEmpty,
+    dailyReportDisplayRows,
+    dailyReportTotals,
     thisMonth,
     monthTotal,
     dailyByMethod,
@@ -309,6 +374,12 @@ export default function Reports() {
     formatMonth,
     formatRupee,
     istMonthStr,
+    profitMonth,
+    setProfitMonth,
+    profitRange,
+    profitLoading,
+    profitData,
+    profitMonthly,
   };
 
   return (
@@ -348,6 +419,7 @@ export default function Reports() {
         <Route path="sales" element={<ReportsSalesView ctx={ctx} />} />
         <Route path="daily" element={<ReportsDailyView ctx={ctx} />} />
         <Route path="staff" element={<ReportsStaffView ctx={ctx} />} />
+        <Route path="profit" element={<ReportsProfitView ctx={ctx} />} />
         <Route path="trends" element={<ReportsTrendsView ctx={ctx} />} />
         <Route path="*" element={<Navigate to="/reports/sales" replace />} />
       </Routes>

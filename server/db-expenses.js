@@ -1,10 +1,16 @@
 const { pool } = require('./database');
+const { todayIST, mapRowDates } = require('./date-utils');
 
 const FIXED_CATEGORIES = ['Salary', 'Product payment', 'Electricity', 'Water', 'Rent', 'Internet', 'Other'];
 const DAILY_CATEGORIES = ['Milk', 'Flowers', 'OT', 'Incentives', 'Supplies', 'Miscellaneous', 'Other'];
 
+function mapExpenseRow(row) {
+  return mapRowDates(row, ['expense_date']);
+}
+
 async function getExpenses(filters = {}) {
-  let query = 'SELECT * FROM expenses WHERE 1=1';
+  let query = `SELECT id, type, category, amount, expense_date::text AS expense_date, notes, created_at
+               FROM expenses WHERE 1=1`;
   const params = [];
   let idx = 1;
   if (filters.type) {
@@ -24,27 +30,28 @@ async function getExpenses(filters = {}) {
   }
   query += ' ORDER BY expense_date DESC, id DESC';
   const res = await pool.query(query, params);
-  return res.rows;
+  return res.rows.map(mapExpenseRow);
 }
 
 async function createExpense({ type, category, amount, expenseDate, notes }) {
   const res = await pool.query(
     `INSERT INTO expenses (type, category, amount, expense_date, notes)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING *`,
-    [type || 'daily', category || 'Other', Number(amount) || 0, expenseDate || new Date().toISOString().slice(0, 10), notes || null]
+     VALUES ($1, $2, $3, $4::date, $5)
+     RETURNING id, type, category, amount, expense_date::text AS expense_date, notes, created_at`,
+    [type || 'daily', category || 'Other', Number(amount) || 0, expenseDate || todayIST(), notes || null]
   );
-  return res.rows[0];
+  return mapExpenseRow(res.rows[0]);
 }
 
 async function updateExpense(id, { type, category, amount, expenseDate, notes }) {
   const res = await pool.query(
     `UPDATE expenses SET type = COALESCE($1, type), category = COALESCE($2, category), amount = COALESCE($3, amount),
-     expense_date = COALESCE($4, expense_date), notes = $5
-     WHERE id = $6 RETURNING *`,
+     expense_date = COALESCE($4::date, expense_date), notes = $5
+     WHERE id = $6
+     RETURNING id, type, category, amount, expense_date::text AS expense_date, notes, created_at`,
     [type, category, amount != null ? Number(amount) : null, expenseDate, notes || null, id]
   );
-  return res.rows[0] || null;
+  return mapExpenseRow(res.rows[0]) || null;
 }
 
 async function deleteExpense(id) {
@@ -54,7 +61,7 @@ async function deleteExpense(id) {
 
 async function getExpenseSummary(filters = {}) {
   let query = `
-    SELECT type, SUM(amount)::numeric as total
+    SELECT type, SUM(amount)::numeric AS total
     FROM expenses WHERE 1=1`;
   const params = [];
   let idx = 1;
@@ -74,11 +81,11 @@ async function getExpenseSummary(filters = {}) {
 }
 
 module.exports = {
+  FIXED_CATEGORIES,
+  DAILY_CATEGORIES,
   getExpenses,
   createExpense,
   updateExpense,
   deleteExpense,
   getExpenseSummary,
-  FIXED_CATEGORIES,
-  DAILY_CATEGORIES,
 };

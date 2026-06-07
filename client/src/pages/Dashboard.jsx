@@ -221,7 +221,7 @@ export default function Dashboard() {
       (a, b) => String(a.date).localeCompare(String(b.date))
     );
     return rows.map((r) => ({
-      date: String(r.date).slice(0, 10),
+      date: appointmentDateToYmd(r.date) || '',
       label: formatDayLabel(r.date),
       revenue: Number(r.revenue) || 0,
       net: Number(r.net) || 0,
@@ -293,7 +293,7 @@ export default function Dashboard() {
     const tail = chartDaily.slice(-7);
     const mix = { cash: 0, upi: 0, card: 0, membership: 0 };
     const byDate = Object.fromEntries(
-      (dailyByMethod || []).map((r) => [String(r.date).slice(0, 10), r])
+      (dailyByMethod || []).map((r) => [appointmentDateToYmd(r.date) || '', r])
     );
     for (const d of tail) {
       const m = byDate[d.date];
@@ -304,7 +304,7 @@ export default function Dashboard() {
       }
     }
     for (const r of tail) {
-      const dr = (dailyReports || []).find((x) => String(x.date).slice(0, 10) === r.date);
+      const dr = (dailyReports || []).find((x) => (appointmentDateToYmd(x.date) || '') === r.date);
       if (dr) mix.membership += Number(dr.membership) || 0;
     }
     const total = mix.cash + mix.upi + mix.card + mix.membership;
@@ -939,7 +939,7 @@ function StatCard({ icon: Icon, label, value, sub, accent, iconBg }) {
 
 function formatDayLabel(dateVal) {
   const ymd = appointmentDateToYmd(dateVal);
-  if (!ymd) return String(dateVal).slice(0, 10);
+  if (!ymd) return appointmentDateToYmd(dateVal) || '';
   return formatDateIST(`${ymd}T12:00:00+05:30`, { weekday: 'short', day: 'numeric', month: 'short' });
 }
 

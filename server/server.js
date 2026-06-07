@@ -12,6 +12,8 @@ const dbCrm = require('./db-crm');
 const dbStaffMgmt = require('./db-staff-management');
 const dbExpenses = require('./db-expenses');
 const dbEod = require('./db-eod');
+const dbProfit = require('./db-profit');
+const { todayIST, istMonthStr, lastDayOfMonthYmd } = require('./date-utils');
 const whatsapp = require('./services/whatsapp');
 const invoiceEmail = require('./services/invoiceEmail');
 
@@ -146,14 +148,35 @@ app.get('/api/analytics/daily', async (req, res) => {
 app.get('/api/analytics/monthly', async (req, res) => {
   try {
     const months = Math.min(24, Math.max(3, parseInt(req.query.months, 10) || 12));
-    const data = await db.getMonthlySales(months);
-    const margin = (parseFloat(process.env.PROFIT_MARGIN_PERCENT) || 30) / 100;
-    const withProfit = data.map((r) => ({
-      ...r,
-      revenue: Number(r.revenue),
-      profit: Number((r.revenue * margin).toFixed(2)),
-    }));
-    res.json({ success: true, data: withProfit });
+    const data = await dbProfit.getMonthlyProfitTrend(months);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** Profit & loss for a calendar date range (revenue, COGS, expenses, net profit). */
+app.get('/api/analytics/profit', async (req, res) => {
+  try {
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    const { from, to } = req.query;
+    if (!from || !to || !re.test(from) || !re.test(to)) {
+      return res.status(400).json({ success: false, error: 'from and to required as YYYY-MM-DD' });
+    }
+    if (from > to) return res.status(400).json({ success: false, error: 'from must be <= to' });
+    const data = await dbProfit.getProfitReport(from, to);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** Monthly profit trend (revenue, COGS, expenses, net profit). */
+app.get('/api/analytics/profit/monthly', async (req, res) => {
+  try {
+    const months = Math.min(24, Math.max(3, parseInt(req.query.months, 10) || 12));
+    const data = await dbProfit.getMonthlyProfitTrend(months);
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -284,13 +307,15 @@ app.get('/api/analytics/staff-daily-sales', async (req, res) => {
 
 app.get('/api/analytics/daily-reports', async (req, res) => {
   try {
-    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 14));
-    const data = await db.getDailyReports(days);
-    const expensesByDate = {};
-    for (const row of data) {
-      const exps = await dbExpenses.getExpenses({ fromDate: row.date, toDate: row.date });
-      row.expenses = exps.reduce((s, e) => s + Number(e.amount || 0), 0);
-      row.net = Math.round((row.revenue - row.expenses) * 100) / 100;
+    const re = /^\d{4}-\d{2}-\d{2}$/;
+    const { from, to } = req.query;
+    let data;
+    if (from && to && re.test(from) && re.test(to)) {
+      if (from > to) return res.status(400).json({ success: false, error: 'from must be <= to' });
+      data = await db.getDailyReportsForDateRange(from, to);
+    } else {
+      const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 14));
+      data = await db.getDailyReports(days);
     }
     res.json({ success: true, data });
   } catch (err) {
@@ -1589,9 +1614,9 @@ app.get('/api/analytics/clients/summary', async (req, res) => {
 // Debug: inspect invoice dates for a month (helps diagnose Feb showing 0)
 app.get('/api/analytics/clients/debug', async (req, res) => {
   try {
-    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    const month = req.query.month || istMonthStr();
     const startDate = `${month}-01`;
-    const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0).toISOString().slice(0, 10);
+    const endDate = lastDayOfMonthYmd(month);
     const r = await db.pool.query(
       `SELECT id, invoice_number, invoice_date, created_at,
         (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date AS created_ist,
@@ -1612,9 +1637,9 @@ app.get('/api/analytics/clients/debug', async (req, res) => {
 // Debug: see raw invoice dates for a month (helps diagnose Feb showing 0)
 app.get('/api/analytics/clients/debug', async (req, res) => {
   try {
-    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    const month = req.query.month || istMonthStr();
     const startDate = `${month}-01`;
-    const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0).toISOString().slice(0, 10);
+    const endDate = lastDayOfMonthYmd(month);
     const r = await db.pool.query(
       `SELECT id, invoice_number, invoice_date, created_at,
         (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date AS created_ist,
@@ -1634,9 +1659,9 @@ app.get('/api/analytics/clients/debug', async (req, res) => {
 // Debug: see raw invoice dates for a month (helps diagnose Feb showing 0)
 app.get('/api/analytics/clients/debug', async (req, res) => {
   try {
-    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    const month = req.query.month || istMonthStr();
     const startDate = `${month}-01`;
-    const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0).toISOString().slice(0, 10);
+    const endDate = lastDayOfMonthYmd(month);
     const r = await db.pool.query(
       `SELECT id, invoice_number, invoice_date, created_at,
         (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date AS created_utc_ist,
@@ -1656,9 +1681,9 @@ app.get('/api/analytics/clients/debug', async (req, res) => {
 // Debug: see raw invoice dates for a month (helps diagnose Feb showing 0)
 app.get('/api/analytics/clients/debug', async (req, res) => {
   try {
-    const month = req.query.month || new Date().toISOString().slice(0, 7);
+    const month = req.query.month || istMonthStr();
     const startDate = `${month}-01`;
-    const endDate = new Date(new Date(startDate).getFullYear(), new Date(startDate).getMonth() + 1, 0).toISOString().slice(0, 10);
+    const endDate = lastDayOfMonthYmd(month);
     const { pool } = require('./database');
     const r = await pool.query(
       `SELECT id, invoice_number, invoice_date, created_at,
@@ -1784,7 +1809,7 @@ app.post('/api/expenses', async (req, res) => {
       type: type || 'daily',
       category: category.trim(),
       amount: Number(amount),
-      expenseDate: expenseDate || new Date().toISOString().slice(0, 10),
+      expenseDate: expenseDate || todayIST(),
       notes: notes?.trim() || null,
     });
     res.status(201).json({ success: true, data });

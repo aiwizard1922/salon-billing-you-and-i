@@ -191,9 +191,15 @@ export function ReportsSalesView({ ctx }) {
 
 export function ReportsDailyView({ ctx }) {
   const {
-    dailyReports,
-    dailyReportDays,
-    setDailyReportDays,
+    dailyReportMonth,
+    setDailyReportMonth,
+    dailyReportRange,
+    dailyReportLoading,
+    dailyReportShowEmpty,
+    setDailyReportShowEmpty,
+    dailyReportDisplayRows,
+    dailyReportTotals,
+    formatMonth,
     thisMonth,
     monthTotal,
     dailyByMethod,
@@ -214,24 +220,60 @@ export function ReportsDailyView({ ctx }) {
 
       <div className="bg-white rounded-xl shadow-sm p-6 border border-slate-200">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-          <h3 className="text-base font-semibold text-slate-900">End of day</h3>
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-slate-600">Show</span>
-            <select
-              value={dailyReportDays}
-              onChange={(e) => setDailyReportDays(Number(e.target.value))}
-              className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
-            >
-              <option value={7}>Last 7 days</option>
-              <option value={14}>Last 14 days</option>
-              <option value={30}>Last 30 days</option>
-              <option value={60}>Last 60 days</option>
-              <option value={90}>Last 90 days</option>
-            </select>
-          </label>
+          <div>
+            <h3 className="text-base font-semibold text-slate-900">End of day</h3>
+            {dailyReportRange.from && (
+              <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                {formatMonth(dailyReportMonth)} · {dailyReportRange.from} → {dailyReportRange.to}
+                {dailyReportMonth === istMonthStr() && (
+                  <span className="text-amber-700"> (month to date)</span>
+                )}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-slate-600 font-medium">Month</span>
+              <input
+                type="month"
+                value={dailyReportMonth}
+                onChange={(e) => e.target.value && setDailyReportMonth(e.target.value)}
+                className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white min-w-[11rem]"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={dailyReportShowEmpty}
+                onChange={(e) => setDailyReportShowEmpty(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              Show days with no sales or expenses
+            </label>
+          </div>
         </div>
-        {dailyReports.length === 0 ? (
-          <p className="text-slate-500 py-8 text-center text-sm">No data for this period.</p>
+
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2">
+            <p className="text-xs text-slate-500">Revenue</p>
+            <p className="text-lg font-bold tabular-nums text-slate-900">{formatINR(dailyReportTotals.revenue)}</p>
+          </div>
+          <div className="rounded-lg border border-red-100 bg-red-50/50 px-3 py-2">
+            <p className="text-xs text-slate-500">Expenses</p>
+            <p className="text-lg font-bold tabular-nums text-red-700">{formatINR(dailyReportTotals.expenses)}</p>
+          </div>
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 px-3 py-2">
+            <p className="text-xs text-slate-500">Net</p>
+            <p className={`text-lg font-bold tabular-nums ${dailyReportTotals.net >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+              {formatINR(dailyReportTotals.net)}
+            </p>
+          </div>
+        </div>
+
+        {dailyReportLoading ? (
+          <p className="text-slate-500 py-8 text-center text-sm">Loading daily report…</p>
+        ) : dailyReportDisplayRows.length === 0 ? (
+          <p className="text-slate-500 py-8 text-center text-sm">No sales or expenses in this period.</p>
         ) : (
           <>
             <div className="overflow-x-auto rounded-lg border border-slate-100">
@@ -249,9 +291,11 @@ export function ReportsDailyView({ ctx }) {
                 </tr>
               </thead>
               <tbody>
-                {dailyReports.map((row) => (
+                {dailyReportDisplayRows.map((row) => (
                   <tr key={row.date} className="border-b border-slate-100 hover:bg-slate-50/80">
-                    <td className="py-2 px-3 font-medium text-slate-800">{formatDate(row.date)}</td>
+                    <td className="py-2 px-3 font-medium text-slate-800 whitespace-nowrap">
+                      {formatDateIST(row.date, { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </td>
                     <td className="py-2 px-3 text-right tabular-nums" style={{ color: COLORS.cash }}>{formatINR(row.cash)}</td>
                     <td className="py-2 px-3 text-right tabular-nums" style={{ color: COLORS.upi }}>{formatINR(row.upi)}</td>
                     <td className="py-2 px-3 text-right tabular-nums" style={{ color: COLORS.card }}>{formatINR(row.card)}</td>
@@ -262,10 +306,23 @@ export function ReportsDailyView({ ctx }) {
                   </tr>
                 ))}
               </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-slate-200 bg-slate-50/90 font-semibold text-slate-900">
+                  <td className="py-2.5 px-3">Month total</td>
+                  <td colSpan={4} />
+                  <td className="py-2.5 px-3 text-right tabular-nums">{formatINR(dailyReportTotals.revenue)}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums text-red-600">{formatINR(dailyReportTotals.expenses)}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums" style={{ color: dailyReportTotals.net >= 0 ? '#059669' : '#dc2626' }}>
+                    {formatINR(dailyReportTotals.net)}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
             <p className="mt-4 text-xs text-slate-600 leading-relaxed">
               <strong>Revenue</strong> = <strong>cash + UPI + card</strong> collected that day (new money in the drawer).
+              <strong> Expenses</strong> = amounts logged on the Expenses page for that calendar date. Month total should match
+              Profit &amp; loss and the Expenses page for the same month.
               <strong> Member</strong> = amount settled from membership / wallet on invoices. Staff reports use{' '}
               <strong>line list totals</strong> (full price on each line), so if part of the bill was paid from wallet,
               staff amounts can add up to <em>more</em> than Revenue—that is expected, not a bug.
@@ -376,25 +433,26 @@ export function ReportsDailyView({ ctx }) {
   );
 }
 
+/** Staff performance total = services + products (membership ₹ tracked separately). */
+function staffPerformanceTotal(row) {
+  return Math.round(((Number(row?.serviceSales) || 0) + (Number(row?.productSales) || 0)) * 100) / 100;
+}
+
 export function ReportsStaffView({ ctx }) {
   const {
-    perfLoading,
-    perfData,
+    staffLoading,
+    staffData,
     staffPerfChart,
-    staffCalMonth,
-    setStaffCalMonth,
-    staffCalLoading,
+    staffMonth,
+    setStaffMonth,
+    staffRange,
     staffCalGridCells,
     staffCalTotalsByYmd,
-    staffCalSelectedYmd,
-    setStaffCalSelectedYmd,
+    staffSelectedYmd,
+    setStaffSelectedYmd,
     staffCalSelectedRows,
-    perfPreset,
-    setPerfPreset,
-    perfMonth,
-    setPerfMonth,
-    perfRange,
     formatCount,
+    formatMonth,
   } = ctx;
 
   return (
@@ -402,47 +460,38 @@ export function ReportsStaffView({ ctx }) {
       <header>
         <h2 className="text-lg font-semibold text-slate-900">Staff reports</h2>
         <p className="text-sm text-slate-600 mt-1">
-          Performance for the same period as <span className="font-medium text-slate-800">Services and products</span>{' '}
-          (use the controls below). Staff rupee columns are <strong>line totals</strong>, not bank deposits—see notes on
-          this page and under <strong>Daily sales → End of day</strong> for why they do not add up to Revenue.
+          Calendar month view (IST). Amounts are <strong>attributed invoice line totals</strong> (services + products for
+          rankings and daily totals). Membership lines show count and ₹ in their column but are not added into{' '}
+          <strong>Total</strong>. This is not the same as cash collected when customers pay from wallet—see{' '}
+          <strong>Daily sales</strong>.
         </p>
       </header>
 
       <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-700">
-          <span className="font-medium text-slate-900">Sales period</span>
-          <span className="text-slate-500"> — same period as Services and products</span>
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={perfPreset}
-            onChange={(e) => setPerfPreset(e.target.value)}
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
-          >
-            <option value="7">Last 7 days</option>
-            <option value="15">Last 15 days</option>
-            <option value="30">Last 30 days</option>
-            <option value="month">Single month</option>
-          </select>
-          {perfPreset === 'month' && (
-            <input
-              type="month"
-              value={perfMonth}
-              onChange={(e) => setPerfMonth(e.target.value)}
-              className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            />
-          )}
+        <div>
+          <p className="text-sm font-medium text-slate-900">Month</p>
+          <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+            {staffRange.from && staffRange.to
+              ? `${staffRange.from} → ${staffRange.to}`
+              : '—'}
+            {staffMonth ? ` · ${formatMonth(staffMonth)}` : ''}
+          </p>
         </div>
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="month"
+            value={staffMonth}
+            onChange={(e) => e.target.value && setStaffMonth(e.target.value)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white min-w-[11rem]"
+          />
+        </label>
       </div>
-      <p className="text-sm text-slate-700 tabular-nums -mt-2">
-        {perfRange.from && perfRange.to ? `${perfRange.from} to ${perfRange.to}` : '—'}
-      </p>
 
-      {perfLoading ? (
+      {staffLoading ? (
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-16 text-center text-sm text-slate-500">
           Loading staff reports…
         </div>
-      ) : !perfData ? (
+      ) : !staffData ? (
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-16 text-center text-sm text-slate-500">
           Could not load staff performance for this period.
         </div>
@@ -452,9 +501,7 @@ export function ReportsStaffView({ ctx }) {
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
               <h3 className="text-base font-semibold text-slate-900">Staff performance</h3>
               <p className="text-xs text-slate-500 mt-1 mb-4">
-                Bar = service + product line <strong>amounts</strong>. Ties: more membership <em>lines</em>. Calendar cells
-                sum <strong>services + products</strong> for the day (membership lines count in <strong># sales</strong> only;
-                membership <strong>₹</strong> is not included in the calendar figure or daily <strong>Total</strong>).
+                Bar = services + products for the month. Ties broken by membership line count.
               </p>
               {staffPerfChart.length === 0 ? (
                 <p className="text-slate-500 text-sm py-10 text-center">
@@ -505,7 +552,7 @@ export function ReportsStaffView({ ctx }) {
             <div className="bg-gradient-to-br from-amber-50 via-white to-slate-50 rounded-xl shadow-sm border border-amber-200/60 p-5 flex flex-col min-h-[220px]">
               <h3 className="text-base font-semibold text-slate-900">Staff recognitions</h3>
               {(() => {
-                const tp = perfData?.topPerformer;
+                const tp = staffData?.topPerformer;
                 const rankTotal =
                   tp != null
                     ? Number(tp.rankingTotal) ||
@@ -552,7 +599,7 @@ export function ReportsStaffView({ ctx }) {
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 bg-slate-50/80">
-              <h3 className="text-base font-semibold text-slate-900">Staff sales (period)</h3>
+              <h3 className="text-base font-semibold text-slate-900">Staff sales (month)</h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm min-w-[820px]">
@@ -576,7 +623,7 @@ export function ReportsStaffView({ ctx }) {
                     <th
                       rowSpan={2}
                       className="align-bottom text-right py-3 px-4 font-medium text-slate-700 border-l border-slate-200"
-                      title="Sum of line totals (services + products + membership lines). Often larger than Daily Revenue when bills include wallet / membership balance."
+                      title="Services + products line amounts for the month (membership ₹ excluded)."
                     >
                       Total
                     </th>
@@ -591,12 +638,10 @@ export function ReportsStaffView({ ctx }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...(perfData?.staffSales || [])]
+                  {[...(staffData?.staffSales || [])]
                     .sort((a, b) => {
-                      const sa =
-                        (Number(a.serviceSales) || 0) + (Number(a.productSales) || 0);
-                      const sb =
-                        (Number(b.serviceSales) || 0) + (Number(b.productSales) || 0);
+                      const sa = staffPerformanceTotal(a);
+                      const sb = staffPerformanceTotal(b);
                       if (sb !== sa) return sb - sa;
                       return (
                         (Number(b.membershipLineCount) || 0) -
@@ -604,7 +649,7 @@ export function ReportsStaffView({ ctx }) {
                       );
                     })
                     .map((row) => {
-                      const sp = Math.round(Number(row.totalSales || 0) * 100) / 100;
+                      const sp = staffPerformanceTotal(row);
                       return (
                         <tr key={row.staffId} className="border-b border-slate-100 hover:bg-slate-50/80">
                           <td className="py-2.5 px-4 font-medium text-slate-800">{row.staffName}</td>
@@ -636,27 +681,18 @@ export function ReportsStaffView({ ctx }) {
               </table>
             </div>
             <p className="px-5 py-3 text-xs text-slate-600 leading-relaxed border-t border-slate-100 bg-slate-50/40">
-              <strong>Total</strong> here sums <strong>service + product</strong> line amounts for the period. Membership
-              lines still show <strong># sales</strong> and full <strong>Amount</strong> in their column. This table is not
-              the same as the <strong>Daily staff</strong> calendar below (daily view omits membership ₹ from Totals).
+              <strong>Total</strong> = services + products. Membership <strong># sales</strong> and <strong>Amount</strong>{' '}
+              are shown separately. Daily breakdown below uses the same rules for each day in this month.
             </p>
           </div>
 
           <div id="reports-daily-staff" className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden scroll-mt-6">
-            <div className="px-4 sm:px-5 py-4 border-b border-slate-100 bg-slate-50/80 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <h3 className="text-base font-semibold text-slate-900">Daily staff sales (calendar)</h3>
-              <label className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
-                <span className="font-medium">Month</span>
-                <input
-                  type="month"
-                  value={staffCalMonth}
-                  onChange={(e) => e.target.value && setStaffCalMonth(e.target.value)}
-                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-white min-w-[11rem]"
-                />
-              </label>
+            <div className="px-4 sm:px-5 py-4 border-b border-slate-100 bg-slate-50/80">
+              <h3 className="text-base font-semibold text-slate-900">Daily breakdown</h3>
+              <p className="text-xs text-slate-500 mt-1">Same month as above — tap a day for per-staff detail.</p>
             </div>
 
-            {staffCalLoading ? (
+            {staffLoading ? (
               <div className="p-8 animate-pulse space-y-4">
                 <div className="h-48 bg-slate-100 rounded-xl" />
                 <div className="h-24 bg-slate-100 rounded-xl" />
@@ -679,9 +715,9 @@ export function ReportsStaffView({ ctx }) {
                         <button
                           key={cell.ymd}
                           type="button"
-                          onClick={() => setStaffCalSelectedYmd(cell.ymd)}
+                          onClick={() => setStaffSelectedYmd(cell.ymd)}
                           className={`min-h-[4.25rem] sm:min-h-[5rem] rounded-lg border p-1.5 sm:p-2 text-left transition flex flex-col justify-between ${
-                            staffCalSelectedYmd === cell.ymd
+                            staffSelectedYmd === cell.ymd
                               ? 'border-amber-500 bg-amber-50 ring-2 ring-amber-400/40 shadow-sm'
                               : 'border-slate-200 bg-white hover:border-amber-200 hover:bg-amber-50/30'
                           }`}
@@ -698,25 +734,17 @@ export function ReportsStaffView({ ctx }) {
                   </div>
                 </div>
 
-                <p className="text-xs text-slate-500 leading-relaxed px-1">
-                  Daily staff view: <strong>Total</strong> and the calendar number are <strong>services + products</strong>{' '}
-                  only. Membership is tracked with <strong># sales</strong> (line count); membership <strong>Amount</strong> is
-                  not scored here (shows ₹0). That differs from <strong>Daily sales → Revenue</strong> (all tender) and from
-                  the <strong>Staff sales (period)</strong> table above, which still shows full line amounts including
-                  membership ₹.
-                </p>
-
                 <div className="rounded-xl border border-slate-200 overflow-hidden">
                   <div className="px-4 py-3 bg-amber-50/50 border-b border-amber-100/80">
                     <p className="text-sm font-semibold text-slate-900">
-                      {formatDateIST(staffCalSelectedYmd, {
+                      {formatDateIST(staffSelectedYmd, {
                         weekday: 'long',
                         day: 'numeric',
                         month: 'short',
                         year: 'numeric',
                       })}
                     </p>
-                    <p className="text-xs text-slate-500 font-mono mt-0.5">{staffCalSelectedYmd}</p>
+                    <p className="text-xs text-slate-500 font-mono mt-0.5">{staffSelectedYmd}</p>
                   </div>
                   {staffCalSelectedRows.length === 0 ? (
                     <p className="px-4 py-6 text-sm text-slate-500">No staff-attributed line sales for this day.</p>
@@ -765,10 +793,10 @@ export function ReportsStaffView({ ctx }) {
                         </thead>
                         <tbody>
                           {staffCalSelectedRows.map((row, idx) => {
-                            const sp = Math.round(Number(row.totalSales || 0) * 100) / 100;
+                            const sp = staffPerformanceTotal(row);
                             return (
                               <tr
-                                key={`${staffCalSelectedYmd}-${row.staffId ?? 'u'}-${row.staffName}-${idx}`}
+                                key={`${staffSelectedYmd}-${row.staffId ?? 'u'}-${row.staffName}-${idx}`}
                                 className="border-b border-slate-100 hover:bg-slate-50/80"
                               >
                                 <td className="py-2.5 px-4 font-medium text-slate-800">
@@ -792,8 +820,8 @@ export function ReportsStaffView({ ctx }) {
                                 <td className="py-2.5 px-2 text-right tabular-nums border-l border-slate-100">
                                   {formatCount(row.membershipLineCount ?? 0)}
                                 </td>
-                                <td className="py-2.5 px-2 text-right tabular-nums text-slate-700">
-                                  {formatINR(row.membershipSales)}
+                                <td className="py-2.5 px-2 text-right tabular-nums text-slate-400">
+                                  {(row.membershipLineCount ?? 0) > 0 ? '—' : formatINR(0)}
                                 </td>
                                 <td className="py-2.5 px-4 text-right font-semibold tabular-nums border-l border-slate-100">
                                   {formatINR(sp)}
@@ -815,6 +843,198 @@ export function ReportsStaffView({ ctx }) {
   );
 }
 
+function PlLine({ label, amount, bold, negative, indent }) {
+  const n = Number(amount) || 0;
+  const color = negative ? 'text-red-600' : bold ? 'text-slate-900' : 'text-slate-700';
+  return (
+    <div
+      className={`flex justify-between gap-4 py-2 border-b border-slate-100 text-sm ${bold ? 'font-semibold' : ''} ${indent ? 'pl-4' : ''}`}
+    >
+      <span className={color}>{label}</span>
+      <span className={`tabular-nums ${color}`}>{formatINR(n)}</span>
+    </div>
+  );
+}
+
+export function ReportsProfitView({ ctx }) {
+  const {
+    profitMonth,
+    setProfitMonth,
+    profitRange,
+    profitLoading,
+    profitData,
+    profitMonthly,
+    formatMonth,
+    formatRupee,
+    istMonthStr,
+  } = ctx;
+
+  const p = profitData;
+
+  return (
+    <div className="space-y-6">
+      <header>
+        <h2 className="text-lg font-semibold text-slate-900">Profit &amp; loss</h2>
+        <p className="text-sm text-slate-600 mt-1">
+          Revenue collected, product costs (COGS), and operating expenses — net profit for the period.
+        </p>
+      </header>
+
+      <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-slate-900">Month</p>
+          {profitRange.from && (
+            <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+              {formatMonth(profitMonth)} · {profitRange.from} → {profitRange.to}
+              {profitMonth === istMonthStr() && (
+                <span className="text-amber-700"> (month to date)</span>
+              )}
+            </p>
+          )}
+        </div>
+        <input
+          type="month"
+          value={profitMonth}
+          onChange={(e) => e.target.value && setProfitMonth(e.target.value)}
+          className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white min-w-[11rem]"
+        />
+      </div>
+
+      {profitLoading ? (
+        <p className="text-slate-500 py-12 text-center text-sm">Loading profit report…</p>
+      ) : !p ? (
+        <p className="text-slate-500 py-12 text-center text-sm">Could not load profit data.</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            {[
+              { label: 'Revenue', value: p.revenue, color: 'text-blue-700' },
+              { label: 'COGS', value: p.cogs?.totalCogs, color: 'text-red-600' },
+              { label: 'Gross profit', value: p.grossProfit, color: 'text-emerald-700' },
+              { label: 'Expenses', value: p.expenses?.total, color: 'text-red-600' },
+              {
+                label: 'Net profit',
+                value: p.netProfit,
+                color: (p.netProfit ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-600',
+              },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
+                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</p>
+                <p className={`text-xl font-bold mt-1 tabular-nums ${color}`}>{formatINR(value)}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
+              <h3 className="text-base font-semibold text-slate-900 mb-3">P&amp;L statement</h3>
+              <PlLine label="Revenue (cash + UPI + card)" amount={p.revenue} bold />
+              <PlLine label="Services (line totals)" amount={p.revenueBreakdown?.services} indent />
+              <PlLine label="Products sold" amount={p.revenueBreakdown?.products} indent />
+              <PlLine label="Memberships sold" amount={p.revenueBreakdown?.memberships} indent />
+              <PlLine label="Cost of goods sold" amount={-p.cogs?.totalCogs} negative />
+              <PlLine label="Products sold (at cost)" amount={-p.cogs?.productSalesCogs} indent negative />
+              <PlLine label="Back-bar consumption" amount={-p.cogs?.consumedCogs} indent negative />
+              <PlLine label="Gross profit" amount={p.grossProfit} bold />
+              <PlLine label="Operating expenses" amount={-p.expenses?.total} negative />
+              <PlLine label="Fixed expenses" amount={-p.expenses?.fixed} indent negative />
+              <PlLine label="Daily expenses" amount={-p.expenses?.daily} indent negative />
+              <PlLine label="Net profit" amount={p.netProfit} bold />
+            </div>
+
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
+                <h3 className="text-base font-semibold text-slate-900 mb-3">Expense breakdown</h3>
+                {(p.expenses?.rows || []).length === 0 ? (
+                  <p className="text-slate-500 text-sm py-4 text-center">No expenses in this period.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-slate-600">
+                          <th className="text-left py-2 font-medium">Category</th>
+                          <th className="text-left py-2 font-medium">Type</th>
+                          <th className="text-right py-2 font-medium">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {p.expenses.rows.map((row) => (
+                          <tr key={`${row.type}-${row.category}`} className="border-b border-slate-50">
+                            <td className="py-2 text-slate-800">{row.category}</td>
+                            <td className="py-2 text-slate-500 capitalize">{row.type}</td>
+                            <td className="py-2 text-right tabular-nums text-red-600">{formatINR(row.total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-950 leading-relaxed">
+                <p className="font-medium mb-1">How this is calculated</p>
+                <ul className="list-disc pl-4 space-y-1 text-amber-900/90">
+                  <li>
+                    <strong>Revenue</strong> = new money collected (cash, UPI, card). Wallet/membership redemptions are not counted.
+                  </li>
+                  <li>
+                    <strong>COGS</strong> = product cost when sold or consumed during services (from inventory cost price).
+                  </li>
+                  <li>
+                    <strong>Net profit</strong> = revenue − COGS − all expenses logged under Expenses.
+                  </li>
+                  <li>
+                    <strong>Cash surplus</strong> this period (no COGS): {formatINR(p.cashSurplus)} — matches daily “Net” in reports.
+                  </li>
+                  {p.expenses?.productPayments > 0 && (
+                    <li>
+                      You logged {formatINR(p.expenses.productPayments)} under “Product payment”. If those are stock purchases,
+                      COGS already counts product use — avoid double-counting by tracking purchases in inventory only.
+                    </li>
+                  )}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
+        <h3 className="text-base font-semibold text-slate-900 mb-3">Monthly net profit (12 months)</h3>
+        {(profitMonthly || []).length === 0 ? (
+          <p className="text-slate-500 py-8 text-center text-sm">No data yet.</p>
+        ) : (
+          <div className={`${CHART_WRAP} ${CHART_H} w-full`}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={profitMonthly} margin={{ top: 8, right: 12, left: -4, bottom: 4 }} barCategoryGap="14%">
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} strokeOpacity={0.7} />
+                <XAxis
+                  dataKey="month"
+                  tickFormatter={formatMonth}
+                  fontSize={11}
+                  tickLine={false}
+                  stroke="#94a3b8"
+                  interval={0}
+                  angle={-12}
+                  textAnchor="end"
+                  height={48}
+                />
+                <YAxis tickFormatter={formatRupee} fontSize={11} width={56} tickLine={false} stroke="#94a3b8" />
+                <Tooltip formatter={(v) => [formatINR(v), '']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                <Legend wrapperStyle={{ fontSize: 12, paddingTop: 6 }} />
+                <Bar dataKey="revenue" fill={COLORS.revenue} name="Revenue" radius={[3, 3, 0, 0]} maxBarSize={28} />
+                <Bar dataKey="cogs" fill="#f87171" name="COGS" maxBarSize={28} />
+                <Bar dataKey="expenses" fill="#fb923c" name="Expenses" maxBarSize={28} />
+                <Bar dataKey="netProfit" fill={COLORS.profit} name="Net profit" radius={[0, 0, 3, 3]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ReportsTrendsView({ ctx }) {
   const { formatMonth, formatRupee } = ctx;
   const monthlyByMethod = Array.isArray(ctx.monthlyByMethod) ? ctx.monthlyByMethod : [];
@@ -824,7 +1044,7 @@ export function ReportsTrendsView({ ctx }) {
     <div className="space-y-6">
       <header>
         <h2 className="text-lg font-semibold text-slate-900">Monthly trends</h2>
-        <p className="text-sm text-slate-600 mt-1">Last 12 months — payment mix and revenue vs estimated profit.</p>
+        <p className="text-sm text-slate-600 mt-1">Last 12 months — payment mix and revenue vs net profit.</p>
       </header>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 lg:gap-8 items-start">
@@ -864,7 +1084,7 @@ export function ReportsTrendsView({ ctx }) {
                   <Tooltip formatter={(v) => [formatINR(v), '']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                   <Legend wrapperStyle={{ fontSize: 12, paddingTop: 6 }} />
                   <Bar dataKey="revenue" fill={COLORS.revenue} name="Revenue" radius={[3, 3, 0, 0]} maxBarSize={32} />
-                  <Bar dataKey="profit" fill={COLORS.profit} name="Est. Profit" radius={[0, 0, 3, 3]} maxBarSize={32} />
+                  <Bar dataKey="netProfit" fill={COLORS.profit} name="Net profit" radius={[0, 0, 3, 3]} maxBarSize={32} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

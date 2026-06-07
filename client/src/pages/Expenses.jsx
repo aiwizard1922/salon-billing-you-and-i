@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { formatINR } from '../utils/formatCurrency';
 import { Plus, Trash2, Edit2 } from 'lucide-react';
-import { istDateStr } from '../utils/ist';
+import { istDateStr, istMonthStr, monthRangeIST, appointmentDateToYmd } from '../utils/ist';
 
 const API = '/api';
 
@@ -10,12 +10,9 @@ export default function Expenses() {
   const [categories, setCategories] = useState({ fixed: [], daily: [] });
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all'); // all | fixed | daily
-  const [fromDate, setFromDate] = useState(() => {
-    const d = new Date();
-    d.setDate(1);
-    return istDateStr(d);
-  });
-  const [toDate, setToDate] = useState(() => istDateStr());
+  const [expenseMonth, setExpenseMonth] = useState(() => istMonthStr());
+  const [fromDate, setFromDate] = useState(() => monthRangeIST(istMonthStr()).from);
+  const [toDate, setToDate] = useState(() => monthRangeIST(istMonthStr()).to);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({
@@ -100,7 +97,7 @@ export default function Expenses() {
       type: exp.type,
       category: exp.category,
       amount: String(exp.amount),
-      expenseDate: exp.expense_date?.slice(0, 10) || istDateStr(),
+      expenseDate: appointmentDateToYmd(exp.expense_date) || istDateStr(),
       notes: exp.notes || '',
     });
     setShowForm(true);
@@ -144,21 +141,24 @@ export default function Expenses() {
             {label}
           </button>
         ))}
-        <div className="flex gap-2 items-center ml-4">
-          <label className="text-sm text-slate-600">From</label>
+        <div className="flex flex-wrap gap-2 items-center ml-2 sm:ml-4">
+          <label className="text-sm text-slate-600 font-medium">Month</label>
           <input
-            type="date"
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
+            type="month"
+            value={expenseMonth}
+            onChange={(e) => {
+              const ym = e.target.value;
+              if (!ym) return;
+              setExpenseMonth(ym);
+              const r = monthRangeIST(ym);
+              setFromDate(r.from);
+              setToDate(r.to);
+            }}
             className="px-3 py-1.5 border rounded-lg text-sm"
           />
-          <label className="text-sm text-slate-600">To</label>
-          <input
-            type="date"
-            value={toDate}
-            onChange={(e) => setToDate(e.target.value)}
-            className="px-3 py-1.5 border rounded-lg text-sm"
-          />
+          <span className="text-xs text-slate-500 tabular-nums hidden sm:inline">
+            {fromDate} → {toDate}
+          </span>
         </div>
       </div>
 
@@ -266,7 +266,7 @@ export default function Expenses() {
             <tbody>
               {displayList.map((exp) => (
                 <tr key={exp.id} className="border-t hover:bg-slate-50">
-                  <td className="py-3 px-4 text-slate-700">{exp.expense_date?.slice(0, 10)}</td>
+                  <td className="py-3 px-4 text-slate-700">{appointmentDateToYmd(exp.expense_date) || '–'}</td>
                   <td className="py-3 px-4">
                     <span className={`px-2 py-0.5 rounded text-xs ${exp.type === 'fixed' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
                       {exp.type}

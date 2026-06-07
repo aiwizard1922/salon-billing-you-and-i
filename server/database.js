@@ -1,4 +1,11 @@
 const { Pool } = require('pg');
+const {
+  ymdFromDbDate,
+  todayIST,
+  lastDayOfMonthYmd,
+  mapRowDates,
+  mapRowsDates,
+} = require('./date-utils');
 
 /** COUNT/bigint from PostgreSQL may arrive as string or bigint — normalize to a safe integer for JSON. */
 function pgCount(val) {
@@ -238,7 +245,7 @@ async function enrichAppointmentRowsWithServiceLines(rows) {
           staffId: r.staff_id != null ? Number(r.staff_id) : null,
           staffName: r.staff_name || null,
         }));
-    return { ...r, serviceLines };
+    return mapRowDates({ ...r, serviceLines }, ['appointment_date']);
   });
 }
 
@@ -278,7 +285,7 @@ async function createAppointment({
      VALUES ($1, $2, $3, $4::text[], $5::jsonb, $6, $7, $8) RETURNING *`,
     [customerId, appointmentDate, appointmentTime, nameList, JSON.stringify(linesNorm), totalAmount || 0, notes || null, staffIdVal]
   );
-  return res.rows[0];
+  return mapRowDates(res.rows[0], ['appointment_date']);
 }
 
 async function getInvoices(filters = {}) {
@@ -304,7 +311,7 @@ async function getInvoices(filters = {}) {
   }
   query += ' ORDER BY i.id DESC';
   const res = await pool.query(query, params);
-  return res.rows;
+  return mapRowsDates(res.rows, ['invoice_date']);
 }
 
 async function getInvoiceById(id) {
@@ -332,7 +339,7 @@ async function getInvoiceById(id) {
     description: row.service_name || row.product_name || '—',
   }));
   invoice.payment_split = parsePaymentSplitFromNotes(invoice.notes);
-  return invoice;
+  return mapRowDates(invoice, ['invoice_date']);
 }
 
 async function getNextInvoiceNumber() {
@@ -543,14 +550,14 @@ async function ensureDefaultAdmin() {
 
 async function getDailySales(days = 30) {
   const res = await pool.query(
-    `SELECT DATE(paid_at) as date, ${sqlCollectedRevenueSum()}::numeric as revenue
+    `SELECT COALESCE(paid_at::date, invoice_date)::text AS date, ${sqlCollectedRevenueSum()}::numeric AS revenue
      FROM invoices
-     WHERE status = 'paid' AND paid_at >= CURRENT_DATE - INTERVAL '1 day' * $1
-     GROUP BY DATE(paid_at)
+     WHERE status = 'paid' AND COALESCE(paid_at::date, invoice_date) >= CURRENT_DATE - INTERVAL '1 day' * $1
+     GROUP BY COALESCE(paid_at::date, invoice_date)
      ORDER BY date`,
     [days]
   );
-  return res.rows;
+  return mapRowsDates(res.rows, ['date']);
 }
 
 async function getMonthlySales(months = 12) {
@@ -565,19 +572,47 @@ async function getMonthlySales(months = 12) {
   return res.rows;
 }
 
+/** Cash + UPI + card collected in an inclusive calendar date range (IST business day). */
+async function getCollectedRevenueByDateRange(fromDate, toDate) {
+  const res = await pool.query(
+    `SELECT ${sqlCollectedRevenueSum('i')}::numeric AS revenue
+     FROM invoices i
+     WHERE i.status = 'paid'
+       AND ${INVOICE_BUSINESS_DAY} >= $1::date
+       AND ${INVOICE_BUSINESS_DAY} <= $2::date`,
+    [fromDate, toDate]
+  );
+  return Number(res.rows[0]?.revenue || 0);
+}
+
+/** Monthly collected revenue using payment/invoice business day (matches daily reports). */
+async function getMonthlyCollectedRevenue(months = 12) {
+  const res = await pool.query(
+    `SELECT TO_CHAR(${INVOICE_BUSINESS_DAY}, 'YYYY-MM') AS month,
+            ${sqlCollectedRevenueSum('i')}::numeric AS revenue
+     FROM invoices i
+     WHERE i.status = 'paid'
+       AND ${INVOICE_BUSINESS_DAY} >= DATE_TRUNC('month', CURRENT_DATE) - ($1::int - 1) * INTERVAL '1 month'
+     GROUP BY 1
+     ORDER BY 1`,
+    [months]
+  );
+  return res.rows.map((r) => ({ month: r.month, revenue: Number(r.revenue) || 0 }));
+}
+
 async function getDailySalesByMethod(days = 30) {
   const res = await pool.query(
-    `SELECT DATE(paid_at) as date,
-       COALESCE(SUM(${sqlPaymentMethodAmount('cash')}), 0)::numeric as cash,
-       COALESCE(SUM(${sqlPaymentMethodAmount('upi')}), 0)::numeric as upi,
-       COALESCE(SUM(${sqlPaymentMethodAmount('card')}), 0)::numeric as card
+    `SELECT COALESCE(paid_at::date, invoice_date)::text AS date,
+       COALESCE(SUM(${sqlPaymentMethodAmount('cash')}), 0)::numeric AS cash,
+       COALESCE(SUM(${sqlPaymentMethodAmount('upi')}), 0)::numeric AS upi,
+       COALESCE(SUM(${sqlPaymentMethodAmount('card')}), 0)::numeric AS card
      FROM invoices
-     WHERE status = 'paid' AND paid_at >= CURRENT_DATE - INTERVAL '1 day' * $1
-     GROUP BY DATE(paid_at)
+     WHERE status = 'paid' AND COALESCE(paid_at::date, invoice_date) >= CURRENT_DATE - INTERVAL '1 day' * $1
+     GROUP BY COALESCE(paid_at::date, invoice_date)
      ORDER BY date`,
     [days]
   );
-  return res.rows.map((r) => ({
+  return mapRowsDates(res.rows, ['date']).map((r) => ({
     ...r,
     cash: Number(r.cash),
     upi: Number(r.upi),
@@ -673,13 +708,48 @@ async function getDailyReports(days = 14) {
      GROUP BY expense_date`,
     [days]
   );
-  const expMap = Object.fromEntries(expRes.rows.map((r) => [r.date, Number(r.expenses || 0)]));
-  return revRes.rows.map((r) => {
+  return mergeDailyReportRows(revRes.rows, expRes.rows);
+}
+
+/** Daily reports for an inclusive calendar date range (all days listed, even if no sales). */
+async function getDailyReportsForDateRange(fromDate, toDate) {
+  const revRes = await pool.query(
+    `SELECT d::date::text as date,
+       COALESCE(SUM(${sqlPaymentMethodAmount('cash', 'i')}), 0)::numeric as cash,
+       COALESCE(SUM(${sqlPaymentMethodAmount('upi', 'i')}), 0)::numeric as upi,
+       COALESCE(SUM(${sqlPaymentMethodAmount('card', 'i')}), 0)::numeric as card,
+       COALESCE(SUM(COALESCE(i.amount_from_membership, 0)), 0)::numeric as membership,
+       COUNT(*) FILTER (WHERE i.id IS NOT NULL AND COALESCE(i.amount_from_membership, 0) > 0)::int AS membership_use_count
+     FROM (
+       SELECT generate_series($1::date, $2::date, '1 day'::interval)::date as d
+     ) dates
+     LEFT JOIN invoices i
+       ON COALESCE(i.paid_at::date, i.invoice_date::date) = dates.d AND i.status = 'paid'
+     GROUP BY d
+     ORDER BY d DESC`,
+    [fromDate, toDate]
+  );
+  const expRes = await pool.query(
+    `SELECT expense_date::text as date, COALESCE(SUM(amount), 0)::numeric as expenses
+     FROM expenses
+     WHERE expense_date >= $1::date AND expense_date <= $2::date
+     GROUP BY expense_date`,
+    [fromDate, toDate]
+  );
+  return mergeDailyReportRows(revRes.rows, expRes.rows);
+}
+
+function mergeDailyReportRows(revRows, expRows) {
+  const expMap = Object.fromEntries(
+    expRows.map((r) => [ymdFromDbDate(r.date) || '', Number(r.expenses || 0)])
+  );
+  return revRows.map((r) => {
+    const ymd = ymdFromDbDate(r.date) || '';
     const revenue =
       Number(r.cash || 0) + Number(r.upi || 0) + Number(r.card || 0);
-    const expenses = expMap[r.date] ?? 0;
+    const expenses = expMap[ymd] ?? 0;
     return {
-      date: r.date,
+      date: ymd,
       cash: Number(r.cash || 0),
       upi: Number(r.upi || 0),
       card: Number(r.card || 0),
@@ -874,12 +944,12 @@ async function getStaff(activeOnly = true) {
   let query = 'SELECT * FROM staff ORDER BY name';
   if (activeOnly) query = 'SELECT * FROM staff WHERE is_active = TRUE ORDER BY name';
   const res = await pool.query(query);
-  return res.rows;
+  return mapRowsDates(res.rows, ['join_date']);
 }
 
 async function getStaffById(id) {
   const res = await pool.query('SELECT * FROM staff WHERE id = $1', [id]);
-  return res.rows[0] || null;
+  return mapRowDates(res.rows[0] || null, ['join_date']);
 }
 
 async function createStaff({ name, phone, email, role, joinDate, notes }) {
@@ -888,7 +958,7 @@ async function createStaff({ name, phone, email, role, joinDate, notes }) {
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
     [name || '', phone || null, email || null, role || null, joinDate || null, notes || null]
   );
-  return res.rows[0];
+  return mapRowDates(res.rows[0], ['join_date']);
 }
 
 async function updateStaff(id, { name, phone, email, role, joinDate, notes, isActive }) {
@@ -917,7 +987,7 @@ async function getStaffWorkHistory(filters = {}) {
   if (filters.to) { query += ` AND i.invoice_date <= $${idx}`; params.push(filters.to); idx++; }
   query += ' ORDER BY i.invoice_date DESC, ii.id DESC';
   const res = await pool.query(query, params);
-  return res.rows;
+  return mapRowsDates(res.rows, ['invoice_date']);
 }
 
 // --- Membership plans ---
@@ -969,13 +1039,13 @@ async function getCustomerMemberships(customerId = null, status = null) {
   else { query += ` AND cm.status != 'upgraded'`; }
   query += ' ORDER BY cm.id DESC';
   const res = await pool.query(query, params);
-  return res.rows;
+  return mapRowsDates(res.rows, ['start_date', 'end_date']);
 }
 
 async function assignMembershipToCustomer({ customerId, planId, startDate, endDate, notes, creditAmount }) {
   // Value-based: creditAmount = plan price (what they pay = credit they get)
   // Use CURRENT_DATE for dates when null (works even if migration 008 not run - columns may still be NOT NULL)
-  const start = startDate || new Date().toISOString().slice(0, 10);
+  const start = startDate || todayIST();
   const end = endDate || start; // placeholder; validity is based on remaining_balance only
   const credit = Number(creditAmount) || 0;
   const res = await pool.query(
@@ -983,7 +1053,7 @@ async function assignMembershipToCustomer({ customerId, planId, startDate, endDa
      VALUES ($1, $2, $3, $4, $5, $5, 'active', $6) RETURNING *`,
     [customerId, planId, start, end, credit, notes || null]
   );
-  return res.rows[0];
+  return mapRowDates(res.rows[0], ['start_date', 'end_date']);
 }
 
 async function getActiveMembershipForCustomer(customerId) {
@@ -996,7 +1066,7 @@ async function getActiveMembershipForCustomer(customerId) {
      ORDER BY cm.id DESC LIMIT 1`,
     [customerId]
   );
-  return res.rows[0] || null;
+  return mapRowDates(res.rows[0] || null, ['start_date', 'end_date']);
 }
 
 async function getMembershipByIdAndCustomer(membershipId, customerId) {
@@ -1008,7 +1078,7 @@ async function getMembershipByIdAndCustomer(membershipId, customerId) {
      WHERE cm.id = $1 AND cm.customer_id = $2 AND COALESCE(cm.remaining_balance, 0) > 0`,
     [membershipId, customerId]
   );
-  return res.rows[0] || null;
+  return mapRowDates(res.rows[0] || null, ['start_date', 'end_date']);
 }
 
 async function getMembershipByIdAndCustomerAllowZeroBalance(membershipId, customerId) {
@@ -1020,7 +1090,7 @@ async function getMembershipByIdAndCustomerAllowZeroBalance(membershipId, custom
      WHERE cm.id = $1 AND cm.customer_id = $2`,
     [membershipId, customerId]
   );
-  return res.rows[0] || null;
+  return mapRowDates(res.rows[0] || null, ['start_date', 'end_date']);
 }
 
 async function repairMembershipBalanceIfNeeded(membership) {
@@ -1047,7 +1117,7 @@ async function getLatestMembershipForCustomer(customerId) {
      ORDER BY cm.id DESC LIMIT 1`,
     [customerId]
   );
-  return res.rows[0] || null;
+  return mapRowDates(res.rows[0] || null, ['start_date', 'end_date']);
 }
 
 // --- Client analytics (visits, new vs returning, gender breakdown) ---
@@ -1058,23 +1128,6 @@ function getISTMonth() {
   const y = parts.find((p) => p.type === 'year').value;
   const m = parts.find((p) => p.type === 'month').value;
   return `${y}-${m}`;
-}
-
-/**
- * Last calendar day of month YYYY-MM as YYYY-MM-DD.
- * Avoids `new Date('YYYY-MM-01')` (parsed as UTC → wrong getMonth() in western zones) and
- * avoids `toISOString().slice(0, 10)` (UTC can shift the calendar day vs local).
- */
-function lastDayOfMonthYmd(targetMonth) {
-  const [ys, ms] = String(targetMonth).split('-');
-  const y = parseInt(ys, 10);
-  const m = parseInt(ms, 10);
-  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return null;
-  const d = new Date(y, m, 0);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
 }
 
 async function getClientAnalytics(month = null) {
@@ -1105,10 +1158,10 @@ async function getClientAnalytics(month = null) {
   if (totalVisited === 0) {
     // Help user find data: return date range and sample of invoice dates for debugging
     const rangeRes = await pool.query(
-      `SELECT MIN(invoice_date) as min_date, MAX(invoice_date) as max_date, COUNT(*)::int as total FROM invoices`
+      `SELECT MIN(invoice_date::text) AS min_date, MAX(invoice_date::text) AS max_date, COUNT(*)::int AS total FROM invoices`
     );
     const sampleRes = await pool.query(
-      `SELECT id, invoice_number, invoice_date, created_at,
+      `SELECT id, invoice_number, invoice_date::text AS invoice_date, created_at,
         (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::date as created_ist,
         (created_at AT TIME ZONE 'Asia/Kolkata')::date as created_local
        FROM invoices ORDER BY id DESC LIMIT 5`
@@ -1124,7 +1177,13 @@ async function getClientAnalytics(month = null) {
       female: 0,
       other: 0,
       unknownGender: 0,
-      invoiceDateRange: r?.total > 0 ? { min: r.min_date, max: r.max_date, totalInvoices: r.total } : null,
+      invoiceDateRange: r?.total > 0
+        ? {
+            min: ymdFromDbDate(r.min_date),
+            max: ymdFromDbDate(r.max_date),
+            totalInvoices: r.total,
+          }
+        : null,
       _debug: { startDate, endDate, sampleInvoices: sampleRes.rows },
     };
   }
@@ -1497,7 +1556,13 @@ async function getStaffSalesByDateRange(fromDate, toDate) {
           productSales: Number(r.product_sales) || 0,
           membershipSales: Number(r.membership_sales) || 0,
           serviceSales: Number(r.service_sales) || 0,
+          /** All line amounts incl. membership (informational). */
           totalSales: Number(r.total_sales) || 0,
+          /** Services + products — used for rankings and daily totals. */
+          performanceTotal:
+            Math.round(
+              ((Number(r.service_sales) || 0) + (Number(r.product_sales) || 0)) * 100,
+            ) / 100,
           lineCount: pgCount(r.line_count),
           serviceLineCount: cnt.serviceLineCount,
           productLineCount: cnt.productLineCount,
@@ -1517,6 +1582,7 @@ async function getStaffSalesByDateRange(fromDate, toDate) {
       membershipSales: 0,
       serviceSales: 0,
       totalSales: 0,
+      performanceTotal: 0,
       lineCount: 0,
       serviceLineCount: 0,
       productLineCount: 0,
@@ -1593,6 +1659,10 @@ async function getStaffDailySalesByDateRange(fromDate, toDate) {
       productSales: Number(r.product_sales) || 0,
       membershipSales: Number(r.membership_sales) || 0,
       totalSales: Number(r.total_sales) || 0,
+      performanceTotal:
+        Math.round(
+          ((Number(r.service_sales) || 0) + (Number(r.product_sales) || 0)) * 100,
+        ) / 100,
       lineCount: pgCount(r.line_count),
       serviceLineCount: cnt.serviceLineCount,
       productLineCount: cnt.productLineCount,
@@ -1603,14 +1673,7 @@ async function getStaffDailySalesByDateRange(fromDate, toDate) {
 
 /** node-pg may return DATE as string or Date — always YYYY-MM-DD (IST calendar for Date objects). */
 function normalizeSqlYmd(val) {
-  if (val == null || val === '') return '';
-  if (typeof val === 'string') return val.slice(0, 10);
-  if (val instanceof Date && !Number.isNaN(val.getTime())) {
-    return val.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  }
-  const s = String(val);
-  const m = s.match(/(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1] : s.slice(0, 10);
+  return ymdFromDbDate(val) || '';
 }
 
 async function getStaffAttendanceSummaryByDateRange(fromDate, toDate) {
@@ -1646,6 +1709,7 @@ module.exports = {
   getDailySales,
   getDailyReport,
   getDailyReports,
+  getDailyReportsForDateRange,
   getDailySheetBreakdown,
   getPaidInvoiceLineItemAggregates,
   getPaidLineItemAggregatesByDateRange,
@@ -1654,6 +1718,8 @@ module.exports = {
   getStaffDailySalesByDateRange,
   getStaffAttendanceSummaryByDateRange,
   getMonthlySales,
+  getCollectedRevenueByDateRange,
+  getMonthlyCollectedRevenue,
   getDailySalesByMethod,
   getMonthlySalesByMethod,
   getCustomerByPhone,

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Scissors, Tag, Plus } from 'lucide-react';
 import { formatINR } from '../utils/formatCurrency';
-import { istDateStr } from '../utils/ist';
+import { istDateStr, appointmentDateToYmd } from '../utils/ist';
 
 const API = '/api';
 
@@ -90,7 +90,9 @@ export default function Catalog() {
 
   const isPromoActive = (p) => {
     const today = istDateStr();
-    return p.start_date <= today && p.end_date >= today && p.is_active !== false;
+    const start = appointmentDateToYmd(p.start_date);
+    const end = appointmentDateToYmd(p.end_date);
+    return start && end && start <= today && end >= today && p.is_active !== false;
   };
 
   if (loading && services.length === 0) return <div className="text-slate-600">Loading...</div>;
@@ -249,7 +251,7 @@ export default function Catalog() {
                   {p.discount_type === 'percent' ? `${p.discount_value}% off` : `${formatINR(p.discount_value)} off`}
                   {p.min_purchase > 0 && ` · Min ${formatINR(p.min_purchase)}`}
                 </p>
-                <p className="text-xs text-slate-500 mt-1">{p.start_date} to {p.end_date}</p>
+                <p className="text-xs text-slate-500 mt-1">{appointmentDateToYmd(p.start_date) || '–'} to {appointmentDateToYmd(p.end_date) || '–'}</p>
               </div>
             ))}
           </div>

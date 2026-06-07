@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Users, Phone, Mail, Briefcase, Calendar, Clock, Target, UserCheck, ExternalLink } from 'lucide-react';
-import { istDateStr, istMonthStr, formatDateIST } from '../utils/ist';
+import { istDateStr, istMonthStr, formatDateIST, appointmentDateToYmd } from '../utils/ist';
 
 const API = '/api';
 
@@ -126,7 +126,7 @@ export default function Staff() {
       phone: s.phone || '',
       email: s.email || '',
       role: s.role || '',
-      joinDate: s.join_date ? s.join_date.slice(0, 10) : '',
+      joinDate: appointmentDateToYmd(s.join_date) || '',
       notes: s.notes || '',
     });
     setEditingId(s.id);
@@ -142,7 +142,7 @@ export default function Staff() {
         phone: s.phone,
         email: s.email,
         role: s.role,
-        joinDate: s.join_date ? s.join_date.slice(0, 10) : null,
+        joinDate: appointmentDateToYmd(s.join_date) || null,
         notes: s.notes,
         isActive: !s.is_active,
       }),

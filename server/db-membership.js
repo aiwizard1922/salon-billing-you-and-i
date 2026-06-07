@@ -1,4 +1,5 @@
 const { pool } = require('./database');
+const { ymdFromDbDate, todayIST, addDaysToYmd, mapRowDates, mapRowsDates } = require('./date-utils');
 
 async function recordMembershipRedemption({ customerMembershipId, invoiceId, amountRedeemed, discountPercent, staffId, staffIncentivePercent = 5 }) {
   const staffIncentiveAmount = staffId ? amountRedeemed * (staffIncentivePercent / 100) : null;
@@ -28,7 +29,7 @@ async function getMembershipRedemptions(customerMembershipId, limit = 50) {
      ORDER BY mr.created_at DESC LIMIT $2`,
     [customerMembershipId, limit]
   );
-  return res.rows;
+  return mapRowsDates(res.rows, ['invoice_date']);
 }
 
 async function getMembershipsExpiringSoon(days = 7) {
@@ -42,7 +43,7 @@ async function getMembershipsExpiringSoon(days = 7) {
      ORDER BY cm.end_date`,
     [days]
   );
-  return res.rows;
+  return mapRowsDates(res.rows, ['start_date', 'end_date']);
 }
 
 async function renewMembership(customerMembershipId, extendDays) {
@@ -52,14 +53,15 @@ async function renewMembership(customerMembershipId, extendDays) {
   );
   const m = res.rows[0];
   if (!m) return null;
-  const newEndDate = new Date(Math.max(new Date(m.end_date).getTime(), Date.now()));
-  newEndDate.setDate(newEndDate.getDate() + (extendDays || m.duration_days));
+  const endYmd = ymdFromDbDate(m.end_date) || todayIST();
+  const baseYmd = endYmd > todayIST() ? endYmd : todayIST();
+  const newEndYmd = addDaysToYmd(baseYmd, extendDays || m.duration_days);
   await pool.query(
     'UPDATE customer_memberships SET end_date = $1, status = $2 WHERE id = $3',
-    [newEndDate.toISOString().slice(0, 10), 'active', customerMembershipId]
+    [newEndYmd, 'active', customerMembershipId]
   );
   return pool.query('SELECT cm.*, mp.name as plan_name FROM customer_memberships cm JOIN membership_plans mp ON cm.plan_id = mp.id WHERE cm.id = $1', [customerMembershipId])
-    .then((r) => r.rows[0]);
+    .then((r) => mapRowDates(r.rows[0], ['start_date', 'end_date']));
 }
 
 async function upgradeMembership(customerMembershipId, newPlanId) {
@@ -71,13 +73,13 @@ async function upgradeMembership(customerMembershipId, newPlanId) {
   const oldBalance = Number(current.remaining_balance ?? current.initial_balance ?? 0) || 0;
   const totalCredit = newPlanCredit + oldBalance;
   await pool.query('UPDATE customer_memberships SET status = $1 WHERE id = $2', ['upgraded', customerMembershipId]);
-  const startDate = new Date().toISOString().slice(0, 10);
+  const startDate = todayIST();
   const ins = await pool.query(
     `INSERT INTO customer_memberships (customer_id, plan_id, start_date, end_date, initial_balance, remaining_balance, status)
      VALUES ($1, $2, $3, $3, $4, $4, 'active') RETURNING *`,
     [current.customer_id, newPlanId, startDate, totalCredit]
   );
-  return ins.rows[0];
+  return mapRowDates(ins.rows[0], ['start_date', 'end_date']);
 }
 
 async function topUpMembership(customerMembershipId, amount) {
@@ -88,7 +90,7 @@ async function topUpMembership(customerMembershipId, amount) {
      WHERE id = $2 RETURNING *`,
     [amount, customerMembershipId]
   );
-  return res.rows[0] || null;
+  return mapRowDates(res.rows[0] || null, ['start_date', 'end_date']);
 }
 
 async function getReminderSent(customerMembershipId, reminderType) {

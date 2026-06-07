@@ -1,4 +1,5 @@
 const { pool } = require('./database');
+const { mapRowDates, mapRowsDates } = require('./date-utils');
 
 async function getStaffShifts(filters = {}) {
   let query = `
@@ -12,7 +13,7 @@ async function getStaffShifts(filters = {}) {
   if (filters.to) { query += ` AND ss.shift_date <= $${idx}`; params.push(filters.to); idx++; }
   query += ' ORDER BY ss.shift_date, ss.start_time';
   const res = await pool.query(query, params);
-  return res.rows;
+  return mapRowsDates(res.rows, ['shift_date']);
 }
 
 async function createStaffShift({ staffId, shiftDate, startTime, endTime, breakMinutes, notes }) {
@@ -24,7 +25,7 @@ async function createStaffShift({ staffId, shiftDate, startTime, endTime, breakM
      RETURNING *`,
     [staffId, shiftDate, startTime, endTime, breakMinutes ?? 0, notes || null]
   );
-  return res.rows[0];
+  return mapRowDates(res.rows[0], ['shift_date']);
 }
 
 async function deleteStaffShift(id) {
@@ -43,7 +44,7 @@ async function getStaffAttendance(filters = {}) {
   if (filters.to) { query += ` AND sa.attendance_date <= $${idx}`; params.push(filters.to); idx++; }
   query += ' ORDER BY sa.attendance_date DESC';
   const res = await pool.query(query, params);
-  return res.rows;
+  return mapRowsDates(res.rows, ['attendance_date']);
 }
 
 async function upsertStaffAttendance({ staffId, attendanceDate, checkIn, checkOut, status, notes }) {
@@ -59,7 +60,7 @@ async function upsertStaffAttendance({ staffId, attendanceDate, checkIn, checkOu
      RETURNING *`,
     [staffId, attendanceDate, checkIn || null, checkOut || null, status || 'present', notes || null]
   );
-  return res.rows[0];
+  return mapRowDates(res.rows[0], ['attendance_date']);
 }
 
 async function getStaffGoals(staffId = null) {
