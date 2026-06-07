@@ -856,6 +856,26 @@ function PlLine({ label, amount, bold, negative, indent }) {
   );
 }
 
+function ProfitMonthlyTooltip({ active, payload, label, formatMonth }) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-md">
+      <p className="font-medium text-slate-900 mb-1.5">{formatMonth(label)}</p>
+      <p className="text-slate-600">Revenue: <span className="font-medium text-blue-700">{formatINR(row.revenue)}</span></p>
+      <p className="text-slate-600">COGS: <span className="font-medium text-red-600">{formatINR(row.cogs)}</span></p>
+      <p className="text-slate-600">Expenses: <span className="font-medium text-orange-600">{formatINR(row.expenses)}</span></p>
+      <p className="text-slate-800 mt-1 pt-1 border-t border-slate-100">
+        Net profit:{' '}
+        <span className={`font-semibold ${(row.netProfit ?? 0) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+          {formatINR(row.netProfit)}
+        </span>
+      </p>
+    </div>
+  );
+}
+
 export function ReportsProfitView({ ctx }) {
   const {
     profitMonth,
@@ -876,7 +896,7 @@ export function ReportsProfitView({ ctx }) {
       <header>
         <h2 className="text-lg font-semibold text-slate-900">Profit &amp; loss</h2>
         <p className="text-sm text-slate-600 mt-1">
-          Revenue collected, product costs (COGS), and operating expenses — net profit for the period.
+          Money collected minus product costs and expenses. COGS is optional — set cost prices in Inventory to track product margins.
         </p>
       </header>
 
@@ -929,10 +949,11 @@ export function ReportsProfitView({ ctx }) {
             <div className="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
               <h3 className="text-base font-semibold text-slate-900 mb-3">P&amp;L statement</h3>
               <PlLine label="Revenue (cash + UPI + card)" amount={p.revenue} bold />
-              <PlLine label="Services (line totals)" amount={p.revenueBreakdown?.services} indent />
+              <p className="text-xs text-slate-500 py-1 pl-0">Sales mix on invoices (informational — may differ when customers pay from membership wallet):</p>
+              <PlLine label="Services" amount={p.revenueBreakdown?.services} indent />
               <PlLine label="Products sold" amount={p.revenueBreakdown?.products} indent />
               <PlLine label="Memberships sold" amount={p.revenueBreakdown?.memberships} indent />
-              <PlLine label="Cost of goods sold" amount={-p.cogs?.totalCogs} negative />
+              <PlLine label="Cost of goods sold (COGS)" amount={-p.cogs?.totalCogs} negative />
               <PlLine label="Products sold (at cost)" amount={-p.cogs?.productSalesCogs} indent negative />
               <PlLine label="Back-bar consumption" amount={-p.cogs?.consumedCogs} indent negative />
               <PlLine label="Gross profit" amount={p.grossProfit} bold />
@@ -978,7 +999,7 @@ export function ReportsProfitView({ ctx }) {
                     <strong>Revenue</strong> = new money collected (cash, UPI, card). Wallet/membership redemptions are not counted.
                   </li>
                   <li>
-                    <strong>COGS</strong> = product cost when sold or consumed during services (from inventory cost price).
+                    <strong>COGS</strong> (Cost of Goods Sold) = what you paid for products that were sold retail or used in services (from Inventory → cost price). Not required — if cost prices are ₹0, COGS is ₹0 and net profit = revenue − expenses.
                   </li>
                   <li>
                     <strong>Net profit</strong> = revenue − COGS − all expenses logged under Expenses.
@@ -986,6 +1007,11 @@ export function ReportsProfitView({ ctx }) {
                   <li>
                     <strong>Cash surplus</strong> this period (no COGS): {formatINR(p.cashSurplus)} — matches daily “Net” in reports.
                   </li>
+                  {(p.cogs?.totalCogs ?? 0) === 0 && (
+                    <li>
+                      COGS is ₹0 this period — add <strong>cost price</strong> on products in Inventory if you want product margin tracked.
+                    </li>
+                  )}
                   {p.expenses?.productPayments > 0 && (
                     <li>
                       You logged {formatINR(p.expenses.productPayments)} under “Product payment”. If those are stock purchases,
@@ -1000,13 +1026,14 @@ export function ReportsProfitView({ ctx }) {
       )}
 
       <div className="bg-white rounded-xl shadow-sm p-5 border border-slate-200">
-        <h3 className="text-base font-semibold text-slate-900 mb-3">Monthly net profit (12 months)</h3>
+        <h3 className="text-base font-semibold text-slate-900 mb-1">Monthly revenue vs net profit (12 months)</h3>
+        <p className="text-xs text-slate-500 mb-3">Hover a month for COGS and expense breakdown. Net profit = revenue − COGS − expenses.</p>
         {(profitMonthly || []).length === 0 ? (
           <p className="text-slate-500 py-8 text-center text-sm">No data yet.</p>
         ) : (
           <div className={`${CHART_WRAP} ${CHART_H} w-full`}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={profitMonthly} margin={{ top: 8, right: 12, left: -4, bottom: 4 }} barCategoryGap="14%">
+              <BarChart data={profitMonthly} margin={{ top: 8, right: 12, left: -4, bottom: 4 }} barCategoryGap="18%">
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} strokeOpacity={0.7} />
                 <XAxis
                   dataKey="month"
@@ -1020,12 +1047,17 @@ export function ReportsProfitView({ ctx }) {
                   height={48}
                 />
                 <YAxis tickFormatter={formatRupee} fontSize={11} width={56} tickLine={false} stroke="#94a3b8" />
-                <Tooltip formatter={(v) => [formatINR(v), '']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                <Tooltip content={<ProfitMonthlyTooltip formatMonth={formatMonth} />} />
                 <Legend wrapperStyle={{ fontSize: 12, paddingTop: 6 }} />
-                <Bar dataKey="revenue" fill={COLORS.revenue} name="Revenue" radius={[3, 3, 0, 0]} maxBarSize={28} />
-                <Bar dataKey="cogs" fill="#f87171" name="COGS" maxBarSize={28} />
-                <Bar dataKey="expenses" fill="#fb923c" name="Expenses" maxBarSize={28} />
-                <Bar dataKey="netProfit" fill={COLORS.profit} name="Net profit" radius={[0, 0, 3, 3]} maxBarSize={28} />
+                <Bar dataKey="revenue" fill={COLORS.revenue} name="Revenue" radius={[3, 3, 0, 0]} maxBarSize={36} />
+                <Bar dataKey="netProfit" name="Net profit" radius={[3, 3, 0, 0]} maxBarSize={36}>
+                  {(profitMonthly || []).map((row) => (
+                    <Cell
+                      key={row.month}
+                      fill={(row.netProfit ?? 0) >= 0 ? COLORS.profit : '#ef4444'}
+                    />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>

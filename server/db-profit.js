@@ -10,14 +10,22 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 const MONTHS_SINCE = `DATE_TRUNC('month', CURRENT_DATE) - ($1::int - 1) * INTERVAL '1 month'`;
 
+/** Product cost: prefer invoice_items.product_id, fall back to matching product name. */
+const PRODUCT_COGS_JOIN = `
+  LEFT JOIN products p_id ON p_id.id = ii.product_id
+  LEFT JOIN products p_name ON ii.product_id IS NULL
+    AND LOWER(TRIM(p_name.name)) = LOWER(TRIM(REGEXP_REPLACE(ii.service_name, '^\\\\[Product\\\\]\\\\s*', '', 'i')))
+`;
+
+const productCostExpr = 'COALESCE(p_id.cost_price, p_name.cost_price, 0)';
+
 async function getCogsForDateRange(fromDate, toDate) {
   const [soldRes, consumedRes] = await Promise.all([
     pool.query(
-      `SELECT COALESCE(SUM(ii.quantity::numeric * COALESCE(p.cost_price, 0)), 0)::numeric AS cogs
+      `SELECT COALESCE(SUM(ii.quantity::numeric * ${productCostExpr}), 0)::numeric AS cogs
        FROM invoice_items ii
        INNER JOIN invoices i ON i.id = ii.invoice_id
-       LEFT JOIN products p
-         ON LOWER(TRIM(p.name)) = LOWER(TRIM(REGEXP_REPLACE(ii.service_name, '^\\[Product\\]\\s*', '', 'i')))
+       ${PRODUCT_COGS_JOIN}
        WHERE i.status = 'paid'
          AND ${INVOICE_DAY} >= $1::date
          AND ${INVOICE_DAY} <= $2::date
@@ -120,11 +128,10 @@ async function getMonthlyProfitTrend(months = 12) {
       `SELECT month, COALESCE(SUM(cogs), 0)::numeric AS cogs
        FROM (
          SELECT TO_CHAR(${INVOICE_DAY}, 'YYYY-MM') AS month,
-                ii.quantity::numeric * COALESCE(p.cost_price, 0) AS cogs
+                ii.quantity::numeric * ${productCostExpr} AS cogs
          FROM invoice_items ii
          INNER JOIN invoices i ON i.id = ii.invoice_id
-         LEFT JOIN products p
-           ON LOWER(TRIM(p.name)) = LOWER(TRIM(REGEXP_REPLACE(ii.service_name, '^\\[Product\\]\\s*', '', 'i')))
+         ${PRODUCT_COGS_JOIN}
          WHERE i.status = 'paid'
            AND ii.service_name LIKE '[Product] %'
            AND ${INVOICE_DAY} >= ${MONTHS_SINCE}
