@@ -1,3 +1,7 @@
--- Track amounts per method for split tender (e.g. cash + UPI on one invoice).
-ALTER TABLE invoices ADD COLUMN IF NOT EXISTS primary_payment_amount DECIMAL(10,2);
-ALTER TABLE invoices ADD COLUMN IF NOT EXISTS secondary_payment_amount DECIMAL(10,2);
+-- Originally added primary_payment_amount/secondary_payment_amount to invoices.
+-- Migration 019 immediately moves that data into notes and drops both columns again.
+-- Since this whole file reruns on every boot (no applied-migrations tracking) and
+-- Postgres never reclaims a dropped column's slot in the 1600-column-per-table
+-- limit, the add-then-drop cycle silently exhausted that limit after ~800 boots
+-- and started crash-looping the app. Left as a no-op; 019 already treats a
+-- missing column as a no-op too, so no functional change.
